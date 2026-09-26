@@ -43,7 +43,7 @@ Outputs:
 
 ## Reviewer notes
 
-- This submission is a derivative version of the existing MTI/Bilibili history extension project. The known upstream repository is `https://github.com/mundane799699/bilibili-history-wxt`; attribution is kept in `NOTICE` and the MIT license text is kept in `LICENSE`.
+- This submission is a derivative version of the existing MTI/Bilibili history extension project. The known upstream repository is `https://github.com/mundane799699/bilibili-history-wxt`; attribution is kept in `NOTICE` and the MIT license text is kept in `LICENSE-MIT`. The current combined release is licensed under GPL-3.0-only.
 - Source is TypeScript/React and is bundled by WXT/Vite. There is no obfuscated or remotely executed code.
 - The extension only contacts `bilibili.com` to read the signed-in user's history.
 - Cloud sync is optional, disabled by default, and runs only after the user enters an HTTPS endpoint and explicitly clicks a test or sync button.

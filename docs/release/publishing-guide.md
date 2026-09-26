@@ -22,7 +22,7 @@ pnpm release:package
 发布前必须确认：
 
 - `package.json` 与 `utils/constants.ts` 版本一致；
-- `LICENSE` 与 `NOTICE` 已随扩展包一起打包，二次开发来源说明没有被删掉；
+- `LICENSE`、`LICENSE-MIT` 与 `NOTICE` 已随扩展包一起打包，二次开发来源说明没有被删掉；
 - 隐私政策公网地址可以在未登录状态下打开；
 - 商店截图来自当前版本，且没有真实账号、同步密钥或私人历史；
 - 四个浏览器至少各完成一次安装、保存历史、筛选、分析、导入导出测试；
@@ -90,7 +90,7 @@ bilibili-history-sync@rmqg.org
 2. 同时上传 sources ZIP，构建说明见仓库根目录 `FIREFOX_REVIEW.md`。
 3. 数据收集声明应显示“默认不收集”，并列出可选 `browsingActivity` 与 `authenticationInfo`。
 4. 详细描述必须说明云端同步默认关闭、数据只发送到用户指定地址。
-5. 上传当前版本截图、隐私政策 URL、支持 URL、MIT 许可证和 2.0.1 更新说明。
+5. 上传当前版本截图、隐私政策 URL、支持 URL、GPL-3.0-only 许可证及上游 MIT 来源说明和 2.0.1 更新说明。
 6. Firefox 桌面最低版本为 140；Firefox Android 最低版本为 142，以使用浏览器内置的数据传输授权。
 
 AMO 的 source code 问题选择 Yes。扩展 ZIP 上传 Firefox 包，Source code 单独上传 sources 包；Reviewer notes 可直接粘贴 `FIREFOX_REVIEW.md` 的 Reviewer notes。不要上传 Chrome、Edge 或 Safari 包。

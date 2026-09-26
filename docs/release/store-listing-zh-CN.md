@@ -38,7 +38,7 @@ Edge 专用隐私政策：https://blog.rmqg.org/bilibili-history-sync/privacy-po
 
 本扩展与哔哩哔哩、上海宽娱数码科技有限公司及其关联公司不存在隶属、授权或背书关系。
 
-开源来源说明：本扩展基于现有 MTI/Bilibili 历史记录扩展项目二次开发，当前可确认的上游项目为 Bilibili 无限历史记录 / bilibili-history-wxt，许可证为 MIT。当前版本已调整为历史记录保存与观看分析用途。
+开源来源说明：本扩展基于现有 MTI/Bilibili 历史记录扩展项目二次开发，当前可确认的上游项目为 Bilibili 无限历史记录 / bilibili-history-wxt，许可证为 MIT。本仓库当前组合版本按 GPL-3.0-only 发布，并保留上游 MIT 许可文本与署名。当前版本已调整为历史记录保存与观看分析用途。
 
 ## 2.0.1 更新说明
 

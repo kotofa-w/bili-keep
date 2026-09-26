@@ -3,7 +3,7 @@
   "description": "保存并分析哔哩哔哩历史记录",
   "private": true,
   "version": "2.0.1",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "author": "Bilibili History Plugin Contributors and derivative contributors",
   "homepage": "https://github.com/rmqg/bilibili-history-sync",
   "repository": {

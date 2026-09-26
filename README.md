@@ -104,4 +104,4 @@ pnpm release:package
 
 ## License
 
-本项目基于 [MIT License](LICENSE) 开源。
+当前组合版本按 GPL-3.0-only 发布，见 [LICENSE](LICENSE)。上游 MIT 代码及此前版本的 MIT 授权文本保留在 [LICENSE-MIT](LICENSE-MIT)，来源与署名见 [NOTICE](NOTICE)。

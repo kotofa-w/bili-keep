@@ -25,6 +25,7 @@ for (const target of targets) {
   assert(manifest.permissions.includes("alarms"), `${target}: 缺少 alarms 权限`);
   await stat(path.join(targetDir, "PrivacyInfo.xcprivacy"));
   await stat(path.join(targetDir, "LICENSE"));
+  await stat(path.join(targetDir, "LICENSE-MIT"));
   await stat(path.join(targetDir, "NOTICE"));
 
   if (target === "firefox-mv2") {
@@ -62,8 +63,10 @@ for (const target of targets) {
 for (const requiredFile of [
   "PRIVACY.md",
   "FIREFOX_REVIEW.md",
+  "LICENSE-MIT",
   "NOTICE",
   "public/LICENSE",
+  "public/LICENSE-MIT",
   "public/NOTICE",
   "public/PrivacyInfo.xcprivacy",
   "docs/privacy-policy/index.html",
