@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Toaster } from "react-hot-toast";
 import "./App.css";
 import { TIME_ZONE } from "../../utils/constants";
@@ -9,6 +9,10 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [status, setStatus] = useState("");
   const [isFullSync, setIsFullSync] = useState(false);
+  const [markerNote, setMarkerNote] = useState("");
+  const [markerStatus, setMarkerStatus] = useState("");
+  const [savingMarker, setSavingMarker] = useState(false);
+  const markerLock = useRef(false);
 
   useEffect(() => {
     const checkSyncStatus = async () => {
@@ -23,8 +27,58 @@ function App() {
       }
     };
 
-    checkSyncStatus();
+    void checkSyncStatus().catch((error) =>
+      setStatus(`读取状态失败：${error instanceof Error ? error.message : "未知原因"}`),
+    );
   }, []);
+
+  const saveCurrentMarker = async () => {
+    if (markerLock.current) return;
+    markerLock.current = true;
+    setSavingMarker(true);
+    setMarkerStatus("正在读取当前视频时间点…");
+    try {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      let valid = false;
+      try {
+        const url = new URL(tab?.url || "");
+        valid =
+          url.protocol === "https:" &&
+          url.host === "www.bilibili.com" &&
+          !url.username &&
+          !url.password &&
+          /^\/video\/BV[0-9A-Za-z]{10}\/?$/.test(url.pathname);
+      } catch {
+        /* Only an ordinary Bilibili video tab can provide a position. */
+      }
+      if (!valid || tab?.id === undefined)
+        throw new Error("请先切到 https://www.bilibili.com/video/BV… 普通视频页面");
+      const position = await browser.tabs.sendMessage(tab.id, { action: "marker.position" });
+      if (!position?.success || !position.data)
+        throw new Error(position?.error || "未能读取视频位置，请刷新视频页面后重试");
+      const now = Date.now();
+      const response = await browser.runtime.sendMessage({
+        action: "marker.save",
+        marker: {
+          ...position.data,
+          markerId: crypto.randomUUID(),
+          note: markerNote,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      if (!response?.success) throw new Error(response?.error || "后台未确认保存，请重试");
+      setMarkerNote("");
+      setMarkerStatus("时间标记已保存，可在喜好资料库查看。");
+    } catch (error) {
+      setMarkerStatus(
+        `保存失败：${error instanceof Error ? error.message : "未知原因"}。说明已保留。`,
+      );
+    } finally {
+      markerLock.current = false;
+      setSavingMarker(false);
+    }
+  };
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -63,11 +117,47 @@ function App() {
         </div>
         <button
           className="w-full rounded bg-[#00a1d6] px-2 py-2 text-white hover:bg-[#0091c2] disabled:cursor-not-allowed disabled:bg-gray-300"
-          onClick={() => browser.tabs.create({ url: "/my-history.html" })}
+          onClick={() =>
+            void browser.tabs
+              .create({ url: "/my-history.html" })
+              .catch((error) =>
+                setStatus(`打开失败：${error instanceof Error ? error.message : "未知原因"}`),
+              )
+          }
           disabled={isSyncing}
         >
           打开喜好资料库
         </button>
+        <section className="space-y-2 rounded border border-gray-200 p-3">
+          <label className="block text-xs leading-5">
+            时间点说明（可选）
+            <textarea
+              aria-label="时间点说明"
+              rows={2}
+              maxLength={1000}
+              value={markerNote}
+              disabled={savingMarker}
+              onChange={(event) => setMarkerNote(event.target.value)}
+              placeholder="这个时间点有什么值得回看？"
+              className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm"
+            />
+          </label>
+          <button
+            className="w-full rounded bg-[#00a1d6] px-2 py-2 text-sm text-white hover:bg-[#0091c2] disabled:cursor-not-allowed disabled:bg-gray-300"
+            disabled={savingMarker}
+            onClick={() => void saveCurrentMarker()}
+          >
+            {savingMarker ? "正在保存时间点…" : "保存当前时间点"}
+          </button>
+          <p className="text-xs leading-5 text-gray-500">
+            在当前普通视频页面保存，暂停自动记录时也可使用。
+          </p>
+          {markerStatus && (
+            <p role="status" className="text-xs leading-5 text-gray-600">
+              {markerStatus}
+            </p>
+          )}
+        </section>
         <button
           className="w-full rounded bg-[#00a1d6] px-2 py-2 text-white hover:bg-[#0091c2] disabled:cursor-not-allowed disabled:bg-gray-300"
           onClick={handleSync}

@@ -10,8 +10,14 @@ import {
 import { openDB, putHistoryAndWatchEvent } from "../utils/db";
 import { getStorageValue, setStorageValue } from "../utils/storage";
 import { HistoryItem } from "../utils/types";
-import { getVideoDetails, getVideoInteractions, isVideoPage } from "../utils/captureApi";
-import { savePlaybackSession } from "../utils/library";
+import {
+  getVideoDetails,
+  getVideoDetailsByCid,
+  getVideoInteractions,
+  isVideoPage,
+} from "../utils/captureApi";
+import { getLibraryExtras, savePlaybackSession, saveVideoMarker } from "../utils/library";
+import { parseVideoMarker } from "../utils/markers";
 import {
   getIncrementalCutoff,
   isFullReconcileDue,
@@ -96,6 +102,61 @@ export default defineBackground(() => {
   });
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (typeof message?.action === "string" && message.action.startsWith("marker.")) {
+      let isUI = false;
+      try {
+        const url = new URL(sender.url || "");
+        const extension = new URL(browser.runtime.getURL("/"));
+        isUI =
+          url.protocol === extension.protocol &&
+          url.host === extension.host &&
+          ["/popup.html", "/my-history.html"].includes(url.pathname);
+      } catch {
+        /* Unknown senders have no access to marker operations. */
+      }
+      const validSource =
+        sender.id === browser.runtime.id &&
+        (message.action === "marker.video" ? isVideoPage(sender.url) : isUI);
+      if (!validSource) {
+        sendResponse({ success: false, error: "标记请求来源无效" });
+        return false;
+      }
+      const action = async () => {
+        if (message.action === "marker.video") {
+          const url = new URL(sender.url!);
+          const bvid = url.pathname.match(/^\/video\/(BV[0-9A-Za-z]{10})(?:\/|$)/)?.[1];
+          const part = Number(url.searchParams.get("p") || 1);
+          if (message.bvid !== bvid || message.part !== part)
+            throw new Error("视频正在切换，请稍后重试");
+          return getVideoDetails(message.bvid, message.part);
+        }
+        if (message.action === "marker.save") {
+          await saveVideoMarker(parseVideoMarker(message.marker), 0);
+          return null;
+        }
+        if (message.action === "marker.open") {
+          if (typeof message.markerId !== "string" || message.markerId.length > 200)
+            throw new Error("无效标记标识");
+          const marker = (await getLibraryExtras()).markers.find(
+            (item) => item.markerId === message.markerId,
+          );
+          if (!marker) throw new Error("标记不存在或已删除");
+          const current = await getVideoDetailsByCid(marker.bvid, marker.cid);
+          if (marker.position > current.duration)
+            throw new Error("原时间点已超出当前分P时长，请打开视频检查");
+          const url = new URL(`https://www.bilibili.com/video/${marker.bvid}/`);
+          url.searchParams.set("p", String(current.part));
+          url.searchParams.set("t", String(Math.floor(marker.position)));
+          await browser.tabs.create({ url: url.href });
+          return { url: url.href };
+        }
+        throw new Error("未知标记操作");
+      };
+      action()
+        .then((data) => sendResponse({ success: true, data }))
+        .catch((error) => sendResponse({ success: false, error: getErrorMessage(error) }));
+      return true;
+    }
     if (typeof message?.action === "string" && message.action.startsWith("capture.")) {
       if (sender.id !== browser.runtime.id || !isVideoPage(sender.url)) {
         sendResponse({ success: false, error: "采集来源无效" });

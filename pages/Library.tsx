@@ -1,7 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { LibraryEntryCard, LibraryEntryDialog } from "../components/LibraryEntryCard";
-import { getLibrarySnapshot, importLibrarySnapshot, saveLibraryDecision } from "../utils/library";
+import { MarkerPanel, VideoTagsEditor } from "../components/MarkerPanel";
+import {
+  getLibraryBackup,
+  getLegacyLibraryBackup,
+  getLibraryExtras,
+  getLibrarySnapshot,
+  importLibrarySnapshot,
+  saveLibraryDecision,
+  type LibraryExtras,
+} from "../utils/library";
+import {
+  queryLibraryEntries,
+  type LibrarySort,
+  type LibraryViewFilter,
+} from "../utils/libraryQuery";
 import {
   buildLibraryEntries,
   type LibraryDecision,
@@ -15,13 +29,15 @@ const input =
   "rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900";
 export default function Library() {
   const [snapshot, setSnapshot] = useState<LibrarySnapshot>({ sessions: [], decisions: [] });
+  const [extras, setExtras] = useState<LibraryExtras>({ markers: [], tags: [] });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [tracking, setTracking] = useState(true);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("interesting");
+  const [tagFilter, setTagFilter] = useState("");
+  const [filter, setFilter] = useState<LibraryViewFilter>("all");
   const [captureError, setCaptureError] = useState("");
-  const [sort, setSort] = useState("recent");
+  const [sort, setSort] = useState<LibrarySort>("recent");
   const [page, setPage] = useState(1);
   const lock = useRef(false);
   const refreshSequence = useRef(0);
@@ -32,12 +48,14 @@ export default function Library() {
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current;
-    const [next, settings] = await Promise.all([
+    const [next, nextExtras, settings] = await Promise.all([
       getLibrarySnapshot(),
+      getLibraryExtras(),
       browser.storage.local.get(["biliKeepTrackingEnabled", "biliKeepCaptureError"]),
     ]);
     if (sequence !== refreshSequence.current) return;
     setSnapshot(next);
+    setExtras(nextExtras);
     setTracking(settings.biliKeepTrackingEnabled !== false);
     setCaptureError(
       typeof settings.biliKeepCaptureError === "string" ? settings.biliKeepCaptureError : "",
@@ -81,30 +99,38 @@ export default function Library() {
   const detailEntry = selected
     ? entries.find((entry) => entry.bvid === selected.bvid) || selected
     : null;
-  const filtered = useMemo(() => {
-    const term = query.trim().toLocaleLowerCase();
-    return entries
-      .filter(
-        (entry) =>
-          (filter === "all" ||
-            entry.status === filter ||
-            (filter === "interesting" &&
-              (entry.status === "candidate" || entry.status === "keep"))) &&
-          (!term ||
-            [entry.title, entry.author, entry.bvid, entry.decision?.note || ""].some((text) =>
-              text.toLocaleLowerCase().includes(term),
-            )),
-      )
-      .sort((a, b) =>
-        sort === "score"
-          ? b.score - a.score || b.lastSeenAt - a.lastSeenAt
-          : b.lastSeenAt - a.lastSeenAt,
-      );
-  }, [entries, query, filter, sort]);
+  const filtered = useMemo(
+    () =>
+      queryLibraryEntries(entries, {
+        keyword: query,
+        status: filter,
+        sort,
+        tags: extras.tags,
+        tag: tagFilter,
+      }),
+    [entries, query, filter, sort, extras.tags, tagFilter],
+  );
+  const tagOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    for (const value of [
+      ...extras.tags.flatMap((record) => record.tags),
+      ...(tagFilter ? [tagFilter] : []),
+    ])
+      options.set(value.normalize("NFKC").toLowerCase(), value);
+    return [...options.values()].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [extras.tags, tagFilter]);
   const pages = Math.max(1, Math.ceil(filtered.length / 40));
   const currentPage = Math.min(page, pages);
   const visible = filtered.slice((currentPage - 1) * 40, currentPage * 40);
-  useEffect(() => setPage(1), [query, filter, sort]);
+  useEffect(() => setPage(1), [query, filter, sort, tagFilter]);
+  const clearFilters = () => {
+    setQuery("");
+    setTagFilter("");
+    setFilter("all");
+    setSort("recent");
+    setPage(1);
+    searchInput.current?.focus();
+  };
 
   const save = async (decision: LibraryDecision) =>
     run(async () => {
@@ -113,26 +139,17 @@ export default function Library() {
       toast.success("已保存", { id: "library-save" });
     });
 
-  const exportBackup = () =>
+  const exportBackup = (legacy = false) =>
     run(async () => {
-      const fresh = await getLibrarySnapshot();
-      const blob = new Blob(
-        [
-          JSON.stringify(
-            { format: "bili-keep", version: 1, exportedAt: new Date().toISOString(), ...fresh },
-            null,
-            2,
-          ),
-        ],
-        { type: "application/json" },
-      );
+      const fresh = legacy ? await getLegacyLibraryBackup() : await getLibraryBackup();
+      const blob = new Blob([JSON.stringify(fresh, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `bili-keep-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.download = `bili-keep-${legacy ? "v1-" : ""}${new Date().toISOString().slice(0, 10)}.json`;
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast.success("已导出本地备份");
+      toast.success(legacy ? "已导出v1备份（不含时间标记和标签）" : "已导出完整本地备份");
     });
 
   return (
@@ -167,7 +184,21 @@ export default function Library() {
           {tracking ? "暂停自动记录" : "开启自动记录"}
         </button>
         <button className={button} disabled={busy} onClick={() => void exportBackup()}>
-          导出备份
+          导出完整备份
+        </button>
+        <button
+          className={button}
+          disabled={busy}
+          onClick={() => {
+            if (
+              window.confirm(
+                "v1兼容备份只含观看记录和喜好判断，不含时间标记及其说明、视频标签。确定导出？",
+              )
+            )
+              void exportBackup(true);
+          }}
+        >
+          导出v1兼容备份
         </button>
         <button className={button} disabled={busy} onClick={() => fileInput.current?.click()}>
           合并恢复备份
@@ -213,33 +244,62 @@ export default function Library() {
         <input
           ref={searchInput}
           aria-label="搜索资料库"
-          placeholder="搜索标题、UP 主、BV 或备注"
+          placeholder="搜索标题、UP 主、分P、备注、标签，或粘贴视频链接"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           className={`${input} min-w-48 flex-1`}
         />
         <select
-          aria-label="筛选状态"
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
+          aria-label="筛选标签"
+          value={tagFilter}
+          onChange={(event) => setTagFilter(event.target.value)}
           className={input}
         >
+          <option value="">全部标签</option>
+          {tagOptions.map((tag) => (
+            <option key={tag.normalize("NFKC").toLowerCase()} value={tag}>
+              {tag}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="筛选状态"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value as LibraryViewFilter)}
+          className={input}
+        >
+          <option value="all">全部记录</option>
           <option value="interesting">候选与保留</option>
           <option value="candidate">候选</option>
           <option value="keep">保留</option>
-          <option value="all">全部</option>
+          <option value="observed">已观察</option>
+          <option value="noted">有备注</option>
           <option value="exclude">排除</option>
         </select>
         <select
           aria-label="排序"
           value={sort}
-          onChange={(event) => setSort(event.target.value)}
+          onChange={(event) => setSort(event.target.value as LibrarySort)}
           className={input}
         >
           <option value="recent">最近观看</option>
           <option value="score">喜好分数</option>
+          <option value="title">标题</option>
         </select>
+        <button
+          className={button}
+          disabled={
+            !query && !tagFilter && filter === "all" && sort === "recent" && currentPage === 1
+          }
+          onClick={clearFilters}
+        >
+          清除筛选
+        </button>
       </div>
+      <p className="text-xs text-gray-500 dark:text-neutral-400">
+        多个关键词用空格分隔，可分别匹配标题、UP
+        主、分P、备注和标签；喜好状态仅筛视频，关键词和标签也筛时间标记。
+      </p>
       <p className="text-sm text-gray-500 dark:text-neutral-400" role="status">
         共 {entries.length} 条视频，符合筛选 {filtered.length} 条；本页 {visible.length} 条（每页 40
         条）。
@@ -262,7 +322,7 @@ export default function Library() {
       ) : (
         <div className="rounded-xl border border-dashed border-gray-300 p-10 text-center text-sm leading-7 text-gray-500 dark:border-neutral-700 dark:text-neutral-400">
           {entries.length
-            ? "当前筛选没有匹配视频，试试切换“全部”或调整关键词。"
+            ? "当前条件没有匹配视频，可清除筛选后查看全部记录。"
             : "还没有观看记录。开启自动记录后，在 B 站普通视频页面播放视频，资料会自动积累；开启或安装扩展后请刷新已打开的 B 站页面。"}
         </div>
       )}
@@ -279,7 +339,13 @@ export default function Library() {
               else searchInput.current?.focus();
             });
           }}
-        />
+        >
+          <VideoTagsEditor
+            bvid={detailEntry.bvid}
+            record={extras.tags.find((record) => record.bvid === detailEntry.bvid)}
+            onChanged={refresh}
+          />
+        </LibraryEntryDialog>
       )}
       {pages > 1 && (
         <div className="flex items-center justify-center gap-4">
@@ -301,6 +367,15 @@ export default function Library() {
             下一页
           </button>
         </div>
+      )}
+      {!loading && (
+        <MarkerPanel
+          markers={extras.markers}
+          tags={extras.tags}
+          keyword={query}
+          tag={tagFilter}
+          onChanged={refresh}
+        />
       )}
     </div>
   );

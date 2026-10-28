@@ -35,8 +35,7 @@ export default defineContentScript({
     const onMetadata = (event: Event) => {
       loadedPlayer = event.target;
       loadedKey = currentRouteKey();
-      if (session && video && loadedKey === key && video === event.target)
-        boundSource = video.currentSrc;
+      if (video && loadedKey === key && video === event.target) boundSource = video.currentSrc;
     };
 
     async function status(error: string) {
@@ -156,8 +155,8 @@ export default defineContentScript({
       }
     }
 
-    async function tick() {
-      if (disposed || !enabled) return;
+    async function tick(manual = false) {
+      if (disposed) return;
       const bvid = location.pathname.match(/^\/video\/(BV[0-9A-Za-z]{10})(?:\/|$)/)?.[1];
       const part = Number(new URL(location.href).searchParams.get("p") || 1);
       const nextKey = bvid && Number.isInteger(part) && part > 0 ? `${bvid}:${part}` : "";
@@ -174,14 +173,18 @@ export default defineContentScript({
         loading = false;
         attempts = 0;
       }
-      if (!nextKey) return;
+      if (!nextKey || (!enabled && !manual)) return;
       if (!details && !loading && attempts < 2) {
         loading = true;
         attempts++;
         const token = generation;
         try {
-          const reply = await browser.runtime.sendMessage({ action: "capture.video", bvid, part });
-          if (token !== generation || disposed || !enabled) return;
+          const reply = await browser.runtime.sendMessage({
+            action: manual ? "marker.video" : "capture.video",
+            bvid,
+            part,
+          });
+          if (token !== generation || disposed || (!enabled && !manual)) return;
           if (!reply?.success) throw new Error(reply?.error || "视频信息读取失败");
           details = reply.data;
           void status("");
@@ -194,7 +197,7 @@ export default defineContentScript({
           if (token === generation) loading = false;
         }
       }
-      if (!details || !enabled || disposed) return;
+      if (!details || disposed || (!enabled && !manual)) return;
       const player = document.querySelector<HTMLVideoElement>(
         ".bpx-player-video-wrap video, video",
       );
@@ -215,10 +218,13 @@ export default defineContentScript({
         !(loadedPlayer === player && loadedKey === key)
       )
         return;
-      if (!session) {
+      if (!video) {
         awaitingNewMedia = false;
         video = player;
         boundSource = player.currentSrc;
+      }
+      if (!enabled) return;
+      if (!session) {
         session = {
           ...details,
           sessionId: crypto.randomUUID(),
@@ -263,16 +269,66 @@ export default defineContentScript({
       if (area !== "local" || !changes.biliKeepTrackingEnabled) return;
       const next = changes.biliKeepTrackingEnabled.newValue !== false;
       if (!next) {
+        const passivePlayer = video;
+        const passiveSource = boundSource;
         detach();
         enabled = false;
+        video = passivePlayer;
+        boundSource = passiveSource;
       } else {
         enabled = true;
-        key = "";
         void tick();
       }
     };
 
-    void browser.storage.local.get("biliKeepTrackingEnabled").then((value) => {
+    const onMarkerMessage: Parameters<typeof browser.runtime.onMessage.addListener>[0] = (
+      message,
+      sender,
+      sendResponse,
+    ) => {
+      if (message?.action !== "marker.position") return false;
+      if (
+        sender.id !== browser.runtime.id ||
+        sender.url !== browser.runtime.getURL("/popup.html")
+      ) {
+        sendResponse({ success: false, error: "标记请求来源无效" });
+        return false;
+      }
+      const readPosition = async () => {
+        await trackingReady;
+        await tick(true);
+        if (
+          disposed ||
+          loading ||
+          !video ||
+          !details ||
+          currentRouteKey() !== key ||
+          awaitingNewMedia ||
+          video.seeking ||
+          video.readyState < 2 ||
+          !video.currentSrc ||
+          video.currentSrc !== boundSource ||
+          !Number.isFinite(video.currentTime) ||
+          video.currentTime < 0 ||
+          Math.abs(video.duration - details.duration) > 1.5 ||
+          video.currentTime > details.duration + 1.5
+        )
+          throw new Error("播放器正在切换或尚未就绪，请稍后重试");
+        return { ...details, position: Math.min(details.duration, video.currentTime) };
+      };
+      readPosition()
+        .then((data) => sendResponse({ success: true, data }))
+        .catch((error) =>
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : "无法读取当前时间点",
+          }),
+        );
+      return true;
+    };
+    browser.runtime.onMessage.addListener(onMarkerMessage);
+
+    const trackingReady = browser.storage.local.get("biliKeepTrackingEnabled").then((value) => {
       enabled = value.biliKeepTrackingEnabled !== false;
       void tick();
     });
@@ -295,6 +351,7 @@ export default defineContentScript({
       document.removeEventListener("click", onClick);
       document.removeEventListener("loadedmetadata", onMetadata, true);
       browser.storage.onChanged.removeListener(onStorage);
+      browser.runtime.onMessage.removeListener(onMarkerMessage);
     });
   },
 });

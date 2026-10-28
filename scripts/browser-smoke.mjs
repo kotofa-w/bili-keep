@@ -35,7 +35,7 @@ async function snapshot(worker) {
     if (!(await indexedDB.databases()).some((database) => database.name === "biliKeepLibrary"))
       return { sessions: [], decisions: [] };
     const db = await new Promise((resolve, reject) => {
-      const req = indexedDB.open("biliKeepLibrary", 1);
+      const req = indexedDB.open("biliKeepLibrary");
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
@@ -56,6 +56,26 @@ async function snapshot(worker) {
         db.close();
       };
     });
+  });
+}
+async function markerData(worker) {
+  return worker.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open("biliKeepLibrary");
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    try {
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(["markers", "videoTags"]);
+        const markers = tx.objectStore("markers").getAll();
+        const tags = tx.objectStore("videoTags").getAll();
+        tx.oncomplete = () => resolve({ markers: markers.result, tags: tags.result });
+        tx.onerror = () => reject(tx.error);
+      });
+    } finally {
+      db.close();
+    }
   });
 }
 async function eventually(predicate, label) {
@@ -88,6 +108,19 @@ try {
       else if (url.pathname.endsWith("/coins")) data = { multiply: 2 };
       else if (url.pathname.endsWith("/favoured")) data = { favoured: true };
       else throw new Error(`Unexpected remote request: ${url}`);
+      if (url.pathname.endsWith("/view")) {
+        if (globalThis.markerFixtureMode === "reordered")
+          data.pages = [
+            { ...data.pages[1], page: 1 },
+            { ...data.pages[0], page: 2 },
+          ];
+        if (globalThis.markerFixtureMode === "missing")
+          data.pages = data.pages.filter((part) => part.cid !== 456);
+        if (globalThis.markerFixtureMode === "shortened")
+          data.pages = data.pages.map((part) =>
+            part.cid === 456 ? { ...part, duration: 0.5 } : part,
+          );
+      }
       return new Response(JSON.stringify({ code: 0, data }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -203,6 +236,23 @@ try {
     "same-duration SPA part waits for new media identity",
     !(await snapshot(worker)).sessions.some((session) => session.part === 2),
   );
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${new URL(worker.url()).hostname}/popup.html`);
+  await popup.getByRole("textbox", { name: "时间点说明", exact: true }).fill("切P期间保留的说明");
+  await player.bringToFront();
+  await popup
+    .getByRole("button", { name: "保存当前时间点", exact: true })
+    .evaluate((button) => button.click());
+  await popup.getByText(/保存失败/).waitFor();
+  check(
+    "marker refuses a switching same-duration part",
+    (await markerData(worker)).markers.length === 0,
+  );
+  check(
+    "failed marker keeps the draft note",
+    (await popup.getByRole("textbox", { name: "时间点说明", exact: true }).inputValue()) ===
+      "切P期间保留的说明",
+  );
   await player.evaluate(async () => {
     await window.fixture.loadSecondPart();
     await window.fixture.play();
@@ -241,6 +291,45 @@ try {
     "disabled collector stops accumulating sessions",
     JSON.stringify(await snapshot(worker)) === JSON.stringify(stopped),
   );
+  await popup.getByRole("textbox", { name: "时间点说明", exact: true }).fill("单点标记：精彩内容");
+  await player.bringToFront();
+  await popup
+    .getByRole("button", { name: "保存当前时间点", exact: true })
+    .evaluate((button) => button.click());
+  await popup.getByText("时间标记已保存，可在喜好资料库查看。", { exact: true }).waitFor();
+  const savedMarker = (await markerData(worker)).markers[0];
+  check(
+    "paused tracking still allows an explicit point marker",
+    savedMarker?.cid === "456" &&
+      savedMarker.part === 2 &&
+      savedMarker.note === "单点标记：精彩内容",
+  );
+  check(
+    "manual marker does not resume tracking or change sessions",
+    JSON.stringify(await snapshot(worker)) === JSON.stringify(stopped) &&
+      (await worker.evaluate(() => chrome.storage.local.get("biliKeepTrackingEnabled")))
+        .biliKeepTrackingEnabled === false,
+  );
+  const untrackedPlayer = await context.newPage();
+  await untrackedPlayer.goto("https://www.bilibili.com/video/BV1xx411c7mE/");
+  await untrackedPlayer.waitForFunction(() => document.querySelector("video")?.readyState >= 2);
+  await popup
+    .getByRole("textbox", { name: "时间点说明", exact: true })
+    .fill("没有观看会话也要回找");
+  await untrackedPlayer.bringToFront();
+  await popup
+    .getByRole("button", { name: "保存当前时间点", exact: true })
+    .evaluate((button) => button.click());
+  await eventually(
+    async () => (await markerData(worker)).markers.length === 2,
+    "untracked marker saved",
+  );
+  check(
+    "marker-only video creates no synthetic playback session",
+    !(await snapshot(worker)).sessions.some((session) => session.bvid === "BV1xx411c7mE"),
+  );
+  await untrackedPlayer.close();
+  await popup.close();
   await player.close();
 
   const page = await context.newPage();
@@ -248,6 +337,79 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`chrome-extension://${id}/my-history.html`);
   await page.getByRole("heading", { name: "Bili Keep · 喜好归档" }).waitFor();
+  const { version } = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  check(
+    "displayed version matches the extension build",
+    await page.getByText(`v${version}`, { exact: true }).isVisible(),
+  );
+  check(
+    "library defaults to all recorded videos",
+    (await page.getByRole("combobox", { name: "筛选状态" }).inputValue()) === "all",
+  );
+  const observedBackup = {
+    format: "bili-keep",
+    version: 1,
+    sessions: [
+      {
+        ...stopped.sessions[0],
+        sessionId: "fixture-observed",
+        bvid: "BV1xx411c7mE",
+        cid: "999",
+        title: "【模拟验收】低分观察视频",
+        partTitle: "低分分P",
+        position: 1,
+        foregroundSeconds: 1,
+        backgroundSeconds: 0,
+        pipSeconds: 0,
+        intervals: [[0, 1]],
+        interactions: { liked: false, coins: 0, favorited: false, observedAt: Date.now() },
+      },
+    ],
+    decisions: [],
+  };
+  await page.getByLabel("选择喜好归档备份").setInputFiles({
+    name: "observed-fixture.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(observedBackup)),
+  });
+  await page
+    .getByRole("button", { name: "查看详情：【模拟验收】低分观察视频", exact: true })
+    .waitFor();
+  check(
+    "default view includes a low-score observed video",
+    (await page.locator('article[aria-label^="视频条目 "]').count()) === 2,
+  );
+  await page.getByRole("combobox", { name: "筛选状态" }).selectOption("observed");
+  await page
+    .getByRole("button", { name: "查看详情：【模拟验收】低分观察视频", exact: true })
+    .waitFor();
+  check(
+    "observed filter shows unretained viewing records",
+    (await page.locator('article[aria-label^="视频条目 "]').count()) === 1,
+  );
+  await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+  const search = page.getByRole("textbox", { name: "搜索资料库" });
+  await search.fill("参数化 模拟UP 同长第二P");
+  await page.locator('article[aria-label^="视频条目 "]').waitFor();
+  check(
+    "search combines terms across title, author and part titles",
+    (await page.locator('article[aria-label^="视频条目 "]').count()) === 1,
+  );
+  await search.fill("https://www.bilibili.com/video/BV1xx411c7mD/?p=2&t=10");
+  await page.locator('article[aria-label^="视频条目 "]').waitFor();
+  check(
+    "search accepts a Bilibili video URL",
+    (await page.locator('article[aria-label^="视频条目 "]').count()) === 1,
+  );
+  await page.getByRole("combobox", { name: "排序", exact: true }).selectOption("title");
+  await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+  check(
+    "clear filters restores query, status and sort",
+    (await search.inputValue()) === "" &&
+      (await page.getByRole("combobox", { name: "筛选状态" }).inputValue()) === "all" &&
+      (await page.getByRole("combobox", { name: "排序", exact: true }).inputValue()) === "recent",
+  );
+  await page.getByRole("combobox", { name: "筛选状态" }).selectOption("interesting");
   await page
     .getByRole("button", { name: "查看详情：【模拟验收】参数化建模教程", exact: true })
     .waitFor();
@@ -260,6 +422,19 @@ try {
     "cover image loads",
   );
   check("legacy HTTP cover is rendered as a loaded HTTPS image", await cover.isVisible());
+  const resumeLink = page.getByRole("link", { name: /继续观看/ });
+  const resumeUrl = new URL(await resumeLink.getAttribute("href"));
+  check(
+    "resume link exposes the latest part and position",
+    (await resumeLink.innerText()).includes("P2") &&
+      resumeUrl.searchParams.get("p") === "2" &&
+      Number(resumeUrl.searchParams.get("t")) >= 1,
+  );
+  check(
+    "open video link has no resume parameters",
+    (await page.getByRole("link", { name: "打开视频 ↗", exact: true }).getAttribute("href")) ===
+      "https://www.bilibili.com/video/BV1xx411c7mD/",
+  );
   check(
     "compact card hides notes and detailed evidence until opened",
     (await page.getByRole("textbox", { name: "我的备注" }).count()) === 0,
@@ -329,7 +504,16 @@ try {
   );
   await page.getByRole("button", { name: "关闭详情", exact: true }).click();
   await page.getByRole("textbox", { name: "搜索资料库" }).fill("回找建模教程");
-  check("library searches saved notes", (await page.locator("article").count()) === 1);
+  check(
+    "library searches saved notes",
+    (await page.locator('article[aria-label^="视频条目 "]').count()) === 1,
+  );
+  await page.getByRole("combobox", { name: "筛选状态" }).selectOption("noted");
+  await page.locator('article[aria-label^="视频条目 "]').waitFor();
+  check(
+    "noted filter finds a saved personal note",
+    (await page.locator('article[aria-label^="视频条目 "]').count()) === 1,
+  );
   await page.getByRole("button", { name: "查看详情", exact: true }).click();
   await page.getByRole("button", { name: "排除", exact: true }).click();
   await eventually(
@@ -346,29 +530,199 @@ try {
   );
   await page.getByRole("button", { name: "关闭详情", exact: true }).click();
   await page.getByRole("combobox", { name: "筛选状态" }).selectOption("keep");
-  await page.locator("article").waitFor();
+  await page.locator('article[aria-label^="视频条目 "]').waitFor();
+  await page.getByRole("button", { name: "查看详情", exact: true }).click();
+  const tagEditor = page
+    .getByRole("dialog")
+    .getByRole("textbox", { name: "编辑标签 BV1xx411c7mD", exact: true });
+  await tagEditor.fill("尚未保存标签");
+  await page.waitForTimeout(5200);
+  check(
+    "automatic refresh preserves an unsaved tag draft",
+    (await tagEditor.inputValue()) === "尚未保存标签",
+  );
+  await tagEditor.fill("课程, CMOS");
+  await page.getByRole("dialog").getByRole("button", { name: "保存标签", exact: true }).click();
+  await eventually(
+    async () => (await markerData(worker)).tags.some((record) => record.tags.includes("CMOS")),
+    "video tags persisted",
+  );
+  await page.getByRole("button", { name: "关闭详情", exact: true }).click();
+  await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+  await page.getByRole("combobox", { name: "筛选标签", exact: true }).selectOption("CMOS");
+  await page.getByRole("textbox", { name: "搜索资料库", exact: true }).fill("CMOS");
+  check(
+    "tag names are searchable and filter video cards",
+    (await page.locator('article[aria-label^="视频条目 "]').count()) === 1,
+  );
+  const markerRegion = page.getByRole("region", { name: "时间标记", exact: true });
+  const markerRow = markerRegion.getByRole("article").filter({
+    has: page.getByRole("textbox", { name: `时间点说明 ${savedMarker.markerId}`, exact: true }),
+  });
+  await markerRow.waitFor();
+  check(
+    "marker list follows the video tag filter",
+    (await markerRegion.getByRole("article").count()) === 1,
+  );
+  await markerRow
+    .getByRole("textbox", { name: `时间点说明 ${savedMarker.markerId}`, exact: true })
+    .fill("CMOS 复习重点");
+  await markerRow.getByRole("button", { name: "保存说明", exact: true }).click();
+  await eventually(
+    async () =>
+      (await markerData(worker)).markers.find((marker) => marker.markerId === savedMarker.markerId)
+        ?.note === "CMOS 复习重点",
+    "marker note saved",
+  );
+  check(
+    "marker notes edit independently of the video decision",
+    (await snapshot(worker)).decisions[0].note.includes("回找建模教程"),
+  );
+  const markdownEvent = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出当前标记 Markdown", exact: true }).click();
+  const markdownDownload = await markdownEvent;
+  const markdownPath = path.join(reports, "markers.md");
+  await markdownDownload.saveAs(markdownPath);
+  const markdown = await readFile(markdownPath, "utf8");
+  check(
+    "Markdown export preserves the marker source, note and link",
+    markdown.includes("CID 456") &&
+      markdown.includes("CMOS 复习重点") &&
+      markdown.includes("?p=2&t="),
+  );
+  await worker.evaluate(() => {
+    globalThis.markerFixtureMode = "reordered";
+  });
+  const reopenedEvent = context.waitForEvent("page");
+  await markerRow.getByRole("button", { name: "回到时间点 ↗", exact: true }).click();
+  const reopened = await reopenedEvent;
+  await reopened.waitForURL(/bilibili\.com\/video\//);
+  const reopenedUrl = new URL(reopened.url());
+  check(
+    "marker jump resolves CID after parts are reordered",
+    reopenedUrl.searchParams.get("p") === "1" &&
+      Number(reopenedUrl.searchParams.get("t")) === Math.floor(savedMarker.position),
+  );
+  await reopened.close();
+  await page.bringToFront();
+  for (const mode of ["missing", "shortened"]) {
+    await worker.evaluate((value) => {
+      globalThis.markerFixtureMode = value;
+    }, mode);
+    const tabCount = context.pages().length;
+    await markerRow.getByRole("button", { name: "回到时间点 ↗", exact: true }).click();
+    await markerRow.getByText(/回跳失败/).waitFor();
+    check(
+      `marker jump refuses ${mode} source without opening a wrong tab`,
+      context.pages().length === tabCount,
+    );
+  }
+  await worker.evaluate(() => {
+    globalThis.markerFixtureMode = undefined;
+  });
+  await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+  const extraBeforeDelete = await markerData(worker);
+  const staleBackup = {
+    format: "bili-keep",
+    version: 2,
+    exportedAt: Date.now(),
+    ...(await snapshot(worker)),
+    ...extraBeforeDelete,
+  };
+  const markerOnly = extraBeforeDelete.markers.find((marker) => marker.bvid === "BV1xx411c7mE");
+  const markerOnlyRow = markerRegion.getByRole("article").filter({
+    has: page.getByRole("textbox", { name: `时间点说明 ${markerOnly.markerId}`, exact: true }),
+  });
+  check(
+    "untracked video remains visible in the independent marker list",
+    await markerOnlyRow.isVisible(),
+  );
+  page.once("dialog", (dialog) => dialog.accept());
+  await markerOnlyRow.getByRole("button", { name: "删除标记", exact: true }).click();
+  await eventually(
+    async () =>
+      (await markerData(worker)).markers.find((marker) => marker.markerId === markerOnly.markerId)
+        ?.deletedAt !== undefined,
+    "marker soft deletion",
+  );
+  await page.getByLabel("选择喜好归档备份").setInputFiles({
+    name: "stale-v2.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(staleBackup)),
+  });
+  await page.getByText("备份已合并，原有记录已保留").waitFor();
+  check(
+    "old v2 import does not resurrect a deleted marker",
+    (await markerData(worker)).markers.find((marker) => marker.markerId === markerOnly.markerId)
+      ?.deletedAt !== undefined,
+  );
+  await page.getByRole("combobox", { name: "筛选状态" }).selectOption("keep");
+  await page.locator('article[aria-label^="视频条目 "]').waitFor();
   const downloadEvent = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出备份", exact: true }).click();
+  await page.getByRole("button", { name: "导出完整备份", exact: true }).click();
   const download = await downloadEvent;
   const backupPath = path.join(reports, "fixture-backup.json");
   await download.saveAs(backupPath);
   const backup = JSON.parse(await readFile(backupPath, "utf8"));
   check(
     "export includes accumulated sessions and manual notes",
-    backup.sessions.length === 2 && backup.decisions[0].note.includes("回找"),
+    backup.sessions.length === 3 && backup.decisions[0].note.includes("回找"),
+  );
+  check(
+    "full v2 export includes markers, deletion information and tags",
+    backup.version === 2 &&
+      backup.markers.length === 2 &&
+      backup.markers.some((marker) => marker.deletedAt) &&
+      backup.tags.some((record) => record.tags.includes("CMOS")),
   );
   await page.getByLabel("选择喜好归档备份").setInputFiles(backupPath);
   await eventually(
     async () => (await page.getByText("备份已合并，原有记录已保留").count()) > 0,
     "restore feedback",
   );
-  check("reimport is idempotent", (await snapshot(worker)).sessions.length === 2);
+  check("reimport is idempotent", (await snapshot(worker)).sessions.length === 3);
+  const legacyEvent = page.waitForEvent("download");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "导出v1兼容备份", exact: true }).click();
+  const legacyDownload = await legacyEvent;
+  const legacyPath = path.join(reports, "legacy-v1.json");
+  await legacyDownload.saveAs(legacyPath);
+  const legacy = JSON.parse(await readFile(legacyPath, "utf8"));
+  check(
+    "explicit legacy export retains v1 data without pretending to include new modules",
+    legacy.version === 1 && legacy.sessions.length === 3 && !legacy.markers && !legacy.tags,
+  );
   const denied = await page.evaluate(() =>
     chrome.runtime.sendMessage({ action: "capture.save", session: {} }),
   );
   check("background rejects non-video-page capture messages", denied.success === false);
   check("library loads without JS errors", errors.length === 0);
-  await page.getByText("备份已合并，原有记录已保留").waitFor({ state: "hidden", timeout: 10000 });
+  const aiAvailability = await page.evaluate(async () => {
+    const api = globalThis.LanguageModel;
+    let availability = null;
+    let error = null;
+    if (api?.availability) {
+      try {
+        availability = await api.availability();
+      } catch (reason) {
+        error = String(reason);
+      }
+    }
+    return {
+      apiPresent: Boolean(api),
+      availability,
+      error,
+      providerConfigured: false,
+      performedGeneration: false,
+      scope: "isolated Edge extension page, no model download or external generation",
+    };
+  });
+  await writeFile(
+    path.join(reports, "ai-availability.json"),
+    JSON.stringify({ ...aiAvailability, browserVersion: context.browser()?.version() }, null, 2),
+  );
+  // Transient notifications need not disappear before capturing verified UI state.
+  await page.mouse.move(0, 0);
   await page.screenshot({ path: path.join(reports, "library-fixture.png"), fullPage: true });
   await page.getByRole("button", { name: "查看详情", exact: true }).click();
   await page.screenshot({ path: path.join(reports, "library-detail-fixture.png"), fullPage: true });
@@ -377,6 +731,15 @@ try {
   check(
     "library survives browser restart",
     (await snapshot(worker)).decisions[0]?.note.includes("回找建模教程"),
+  );
+  const restoredExtras = await markerData(worker);
+  check(
+    "marker edits, deletion and tags survive browser restart",
+    restoredExtras.markers.find((marker) => marker.markerId === savedMarker.markerId)?.note ===
+      "CMOS 复习重点" &&
+      restoredExtras.markers.find((marker) => marker.markerId === markerOnly.markerId)
+        ?.deletedAt !== undefined &&
+      restoredExtras.tags.some((record) => record.tags.includes("CMOS")),
   );
   await writeFile(
     path.join(reports, "browser-smoke.json"),

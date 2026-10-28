@@ -44,6 +44,36 @@ export async function getVideoDetails(bvid: unknown, part: unknown): Promise<Vid
   };
 }
 
+export async function getVideoDetailsByCid(bvid: unknown, cid: unknown): Promise<VideoDetails> {
+  if (!isBvid(bvid) || typeof cid !== "string" || !/^\d{1,30}$/.test(cid))
+    throw new Error("无效视频或分P标识");
+  const data = await readApi("/x/web-interface/view", { bvid });
+  const matches = Array.isArray(data.pages)
+    ? data.pages.filter((page: { cid: unknown }) => String(page.cid) === cid)
+    : [];
+  const page = matches[0];
+  if (
+    matches.length !== 1 ||
+    !page ||
+    !Number.isInteger(page.page) ||
+    page.page < 1 ||
+    page.page > 100_000 ||
+    !Number.isFinite(page.duration) ||
+    page.duration <= 0
+  )
+    throw new Error("标记来源已变化或无法确认该分P，请打开视频检查");
+  return {
+    bvid,
+    cid,
+    part: page.page,
+    title: String(data.title || "").slice(0, 500),
+    partTitle: String(page.part || "").slice(0, 500),
+    author: String(data.owner?.name || "").slice(0, 200),
+    cover: String(data.pic || ""),
+    duration: page.duration,
+  };
+}
+
 export async function getVideoInteractions(bvid: unknown) {
   if (!isBvid(bvid)) throw new Error("无效视频标识");
   const results = await Promise.allSettled([

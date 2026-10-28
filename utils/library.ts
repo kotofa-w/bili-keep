@@ -1,4 +1,5 @@
 import type { Interval, LibraryDecision, LibrarySnapshot, PlaybackSession } from "./preference";
+import { parseVideoMarker, parseVideoTags, type VideoMarker, type VideoTagRecord } from "./markers";
 
 const MAX_RECORDS = 100_000;
 const MAX_BACKUP_CHARS = 50_000_000;
@@ -92,11 +93,31 @@ const parseDecision = (value: unknown): LibraryDecision => {
   };
 };
 
-export const parseLibraryBackup = (value: unknown): LibrarySnapshot => {
+export type LibraryExtras = { markers: VideoMarker[]; tags: VideoTagRecord[] };
+export type LibraryBackupV2 = LibrarySnapshot &
+  LibraryExtras & {
+    format: "bili-keep";
+    version: 2;
+    exportedAt?: number;
+  };
+
+export const parseLibraryBackup = (value: unknown): LibrarySnapshot | LibraryBackupV2 => {
   const item = record(value);
+  const isV2 = item.format === "bili-keep" && item.version === 2;
   if (item.format !== undefined || item.version !== undefined) {
-    if (item.format !== "bili-keep" || item.version !== 1) return invalid();
+    if (item.format !== "bili-keep" || (item.version !== 1 && !isV2)) return invalid();
   }
+  if (!isV2 && ("markers" in item || "tags" in item)) return invalid();
+  if (
+    isV2 &&
+    Object.keys(item).some(
+      (key) =>
+        !["format", "version", "exportedAt", "sessions", "decisions", "markers", "tags"].includes(
+          key,
+        ),
+    )
+  )
+    return invalid();
   if (
     !Array.isArray(item.sessions) ||
     !Array.isArray(item.decisions) ||
@@ -104,23 +125,57 @@ export const parseLibraryBackup = (value: unknown): LibrarySnapshot => {
   )
     return invalid();
   if (JSON.stringify(value).length > MAX_BACKUP_CHARS) return invalid();
-  return {
+  const snapshot: LibrarySnapshot = {
     sessions: item.sessions.map(parseSession),
     decisions: item.decisions.map(parseDecision),
   };
+  if (!isV2) return snapshot;
+  if (
+    !Array.isArray(item.markers) ||
+    !Array.isArray(item.tags) ||
+    item.sessions.length + item.decisions.length + item.markers.length + item.tags.length >
+      MAX_RECORDS
+  )
+    return invalid();
+  const parsed: LibraryBackupV2 = {
+    format: "bili-keep",
+    version: 2,
+    ...snapshot,
+    markers: item.markers.map(parseVideoMarker),
+    tags: item.tags.map(parseVideoTags),
+  };
+  if (item.exportedAt !== undefined) parsed.exportedAt = number(item.exportedAt, MAX_TIME, 1);
+  return parsed;
 };
+
+const ALL_STORES = ["sessions", "decisions", "markers", "videoTags"];
 
 const openLibrary = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
-    const request = indexedDB.open("biliKeepLibrary", 1);
-    request.onupgradeneeded = () => {
+    const request = indexedDB.open("biliKeepLibrary", 2);
+    let blocked = false;
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-      db.createObjectStore("sessions", { keyPath: "sessionId" });
-      db.createObjectStore("decisions", { keyPath: "bvid" });
+      if (event.oldVersion < 1) {
+        db.createObjectStore("sessions", { keyPath: "sessionId" });
+        db.createObjectStore("decisions", { keyPath: "bvid" });
+      }
+      if (event.oldVersion < 2) {
+        db.createObjectStore("markers", { keyPath: "markerId" });
+        db.createObjectStore("videoTags", { keyPath: "bvid" });
+      }
+    };
+    request.onblocked = () => {
+      blocked = true;
+      reject(new Error("喜好库升级被旧页面占用，请关闭旧版扩展页面后重试"));
     };
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
       const db = request.result;
+      if (blocked) {
+        db.close();
+        return;
+      }
       db.onversionchange = () => db.close();
       resolve(db);
     };
@@ -147,12 +202,60 @@ export const getLibrarySnapshot = async (): Promise<LibrarySnapshot> => {
   }
 };
 
+export const getLibraryExtras = async (): Promise<LibraryExtras> => {
+  const db = await openLibrary();
+  try {
+    const tx = db.transaction(["markers", "videoTags"], "readonly");
+    const done = completion(tx);
+    const markers = tx.objectStore("markers").getAll();
+    const tags = tx.objectStore("videoTags").getAll();
+    await done;
+    return {
+      markers: (markers.result as VideoMarker[]).filter((marker) => marker.deletedAt === undefined),
+      tags: tags.result,
+    };
+  } finally {
+    db.close();
+  }
+};
+
+export const getLibraryBackup = async (): Promise<LibraryBackupV2> => {
+  const db = await openLibrary();
+  try {
+    const tx = db.transaction(ALL_STORES, "readonly");
+    const done = completion(tx);
+    const sessions = tx.objectStore("sessions").getAll();
+    const decisions = tx.objectStore("decisions").getAll();
+    const markers = tx.objectStore("markers").getAll();
+    const tags = tx.objectStore("videoTags").getAll();
+    await done;
+    return {
+      format: "bili-keep",
+      version: 2,
+      exportedAt: Date.now(),
+      sessions: sessions.result,
+      decisions: decisions.result,
+      markers: markers.result,
+      tags: tags.result,
+    };
+  } finally {
+    db.close();
+  }
+};
+
+export const getLegacyLibraryBackup = async () => ({
+  format: "bili-keep" as const,
+  version: 1 as const,
+  exportedAt: Date.now(),
+  ...(await getLibrarySnapshot()),
+});
+
 // Every read-and-compare happens inside the same readwrite transaction as its put.
 // IndexedDB serializes overlapping writes across tabs and service-worker restarts.
 const mergeSnapshot = async (snapshot: LibrarySnapshot): Promise<void> => {
   const db = await openLibrary();
   try {
-    const tx = db.transaction(["sessions", "decisions"], "readwrite");
+    const tx = db.transaction(ALL_STORES, "readwrite");
     const done = completion(tx);
     const sessions = new Map<string, PlaybackSession>();
     const decisions = new Map<string, LibraryDecision>();
@@ -169,14 +272,12 @@ const mergeSnapshot = async (snapshot: LibrarySnapshot): Promise<void> => {
     const sessionStore = tx.objectStore("sessions");
     const decisionStore = tx.objectStore("decisions");
     let totalRecords = 0;
-    const sessionCount = sessionStore.count();
-    const decisionCount = decisionStore.count();
-    sessionCount.onsuccess = () => {
-      totalRecords += sessionCount.result;
-    };
-    decisionCount.onsuccess = () => {
-      totalRecords += decisionCount.result;
-    };
+    for (const name of ALL_STORES) {
+      const count = tx.objectStore(name).count();
+      count.onsuccess = () => {
+        totalRecords += count.result;
+      };
+    }
     for (const session of sessions.values()) {
       const request = sessionStore.get(session.sessionId);
       request.onsuccess = () => {
@@ -212,5 +313,224 @@ export const saveLibraryDecision = async (decision: LibraryDecision): Promise<vo
   await mergeSnapshot({ sessions: [], decisions: [parseDecision(decision)] });
 };
 export const importLibrarySnapshot = async (value: unknown): Promise<void> => {
-  await mergeSnapshot(parseLibraryBackup(value));
+  const snapshot = parseLibraryBackup(value);
+  const db = await openLibrary();
+  try {
+    const tx = db.transaction(ALL_STORES, "readwrite");
+    const done = completion(tx);
+    const reads = ALL_STORES.map((name) => tx.objectStore(name).getAll());
+    let pending = reads.length;
+    let failure: unknown;
+    for (const read of reads)
+      read.onsuccess = () => {
+        if (--pending) return;
+        try {
+          const sessions = new Map<string, PlaybackSession>(
+            reads[0].result.map((item: PlaybackSession) => [item.sessionId, item]),
+          );
+          const decisions = new Map<string, LibraryDecision>(
+            reads[1].result.map((item: LibraryDecision) => [item.bvid, item]),
+          );
+          const markers = new Map<string, VideoMarker>(
+            reads[2].result.map((item: VideoMarker) => [item.markerId, item]),
+          );
+          const tags = new Map<string, VideoTagRecord>(
+            reads[3].result.map((item: VideoTagRecord) => [item.bvid, item]),
+          );
+          for (const session of snapshot.sessions) {
+            const previous = sessions.get(session.sessionId);
+            if (!previous || session.lastSeenAt > previous.lastSeenAt)
+              sessions.set(session.sessionId, session);
+          }
+          for (const decision of snapshot.decisions) {
+            const previous = decisions.get(decision.bvid);
+            if (!previous || decision.updatedAt > previous.updatedAt)
+              decisions.set(decision.bvid, decision);
+          }
+          if ("markers" in snapshot) {
+            for (const marker of snapshot.markers) mergeMarker(markers, marker);
+            for (const tag of snapshot.tags) {
+              const previous = tags.get(tag.bvid);
+              if (!previous || tag.updatedAt > previous.updatedAt) tags.set(tag.bvid, tag);
+            }
+          }
+          const merged = {
+            sessions: [...sessions.values()],
+            decisions: [...decisions.values()],
+            markers: [...markers.values()],
+            tags: [...tags.values()],
+          };
+          if (
+            sessions.size + decisions.size + markers.size + tags.size > MAX_RECORDS ||
+            JSON.stringify(merged).length > MAX_BACKUP_CHARS
+          )
+            invalid();
+          for (const [index, values] of [
+            merged.sessions,
+            merged.decisions,
+            merged.markers,
+            merged.tags,
+          ].entries()) {
+            const store = tx.objectStore(ALL_STORES[index]);
+            for (const item of values) store.put(item);
+          }
+        } catch (error) {
+          failure = error;
+          tx.abort();
+        }
+      };
+    try {
+      await done;
+    } catch (error) {
+      throw failure || error;
+    }
+  } finally {
+    db.close();
+  }
+};
+
+const markerBody = (marker: VideoMarker): string =>
+  JSON.stringify({
+    bvid: marker.bvid,
+    cid: marker.cid,
+    part: marker.part,
+    title: marker.title,
+    partTitle: marker.partTitle,
+    author: marker.author,
+    cover: marker.cover,
+    duration: marker.duration,
+    position: marker.position,
+    note: marker.note,
+    createdAt: marker.createdAt,
+  });
+
+// The ID represents the source revision, so reimporting the same conflict is idempotent.
+const conflictId = (marker: VideoMarker): string => {
+  const source = JSON.stringify([marker.markerId, marker.updatedAt, markerBody(marker)]);
+  let first = 2166136261;
+  let second = 2246822507;
+  for (let i = 0; i < source.length; i++) {
+    first = Math.imul(first ^ source.charCodeAt(i), 16777619);
+    second = Math.imul(second ^ source.charCodeAt(i), 3266489909);
+  }
+  return `import-${(first >>> 0).toString(16)}-${(second >>> 0).toString(16)}`;
+};
+
+const mergeMarker = (markers: Map<string, VideoMarker>, incoming: VideoMarker): void => {
+  const previous = markers.get(incoming.markerId);
+  if (!previous) {
+    markers.set(incoming.markerId, incoming);
+    return;
+  }
+  const newer =
+    incoming.updatedAt > previous.updatedAt ||
+    (incoming.updatedAt === previous.updatedAt &&
+      incoming.deletedAt !== undefined &&
+      previous.deletedAt === undefined);
+  if (previous.deletedAt !== undefined && !newer) return;
+  if (
+    markerBody(previous) !== markerBody(incoming) &&
+    previous.deletedAt === undefined &&
+    incoming.deletedAt === undefined
+  ) {
+    const loser = newer ? previous : incoming;
+    const id = conflictId(loser);
+    const copy = markers.get(id);
+    if (!copy || loser.updatedAt > copy.updatedAt) markers.set(id, { ...loser, markerId: id });
+  }
+  if (newer) markers.set(incoming.markerId, incoming);
+};
+
+const checkRevision = (
+  previous: { updatedAt: number } | undefined,
+  expected: number | undefined,
+): void => {
+  if (expected === undefined) return;
+  number(expected, MAX_TIME);
+  if ((expected === 0 && previous) || (expected !== 0 && previous?.updatedAt !== expected))
+    throw new Error("记录已被其他页面修改，请刷新后重试");
+};
+
+const saveExtra = async <T extends VideoMarker | VideoTagRecord>(
+  storeName: "markers" | "videoTags",
+  key: string,
+  expected: number | undefined,
+  update: (previous: T | undefined) => T,
+): Promise<void> => {
+  const db = await openLibrary();
+  try {
+    const tx = db.transaction(ALL_STORES, "readwrite");
+    const done = completion(tx);
+    let total = 0;
+    let failure: unknown;
+    for (const name of ALL_STORES) {
+      const count = tx.objectStore(name).count();
+      count.onsuccess = () => {
+        total += count.result;
+      };
+    }
+    const store = tx.objectStore(storeName);
+    const read = store.get(key);
+    read.onsuccess = () => {
+      try {
+        const previous = read.result as T | undefined;
+        checkRevision(previous, expected);
+        if (!previous && total >= MAX_RECORDS) invalid();
+        store.put(update(previous));
+      } catch (error) {
+        failure = error;
+        tx.abort();
+      }
+    };
+    try {
+      await done;
+    } catch (error) {
+      throw failure || error;
+    }
+  } finally {
+    db.close();
+  }
+};
+
+export const saveVideoMarker = async (
+  value: VideoMarker,
+  expectedUpdatedAt?: number,
+): Promise<void> => {
+  const marker = parseVideoMarker(value);
+  await saveExtra<VideoMarker>("markers", marker.markerId, expectedUpdatedAt, (previous) => {
+    if (previous?.deletedAt !== undefined) throw new Error("标记已删除，请新建标记");
+    if (marker.deletedAt !== undefined) throw new Error("请使用删除标记操作");
+    return previous
+      ? parseVideoMarker({
+          ...marker,
+          createdAt: previous.createdAt,
+          updatedAt: Math.max(marker.updatedAt, previous.updatedAt + 1, Date.now()),
+        })
+      : marker;
+  });
+};
+
+export const deleteVideoMarker = async (id: string, expectedUpdatedAt: number): Promise<void> => {
+  text(id, 200, 1);
+  number(expectedUpdatedAt, MAX_TIME, 1);
+  await saveExtra<VideoMarker>("markers", id, expectedUpdatedAt, (previous) => {
+    if (!previous) throw new Error("标记不存在");
+    const updatedAt = Math.max(Date.now(), previous.updatedAt + 1);
+    return parseVideoMarker({ ...previous, updatedAt, deletedAt: updatedAt });
+  });
+};
+
+export const saveVideoTags = async (
+  value: VideoTagRecord,
+  expectedUpdatedAt?: number,
+): Promise<void> => {
+  const tags = parseVideoTags(value);
+  await saveExtra<VideoTagRecord>("videoTags", tags.bvid, expectedUpdatedAt, (previous) =>
+    previous
+      ? parseVideoTags({
+          ...tags,
+          updatedAt: Math.max(tags.updatedAt, previous.updatedAt + 1, Date.now()),
+        })
+      : tags,
+  );
 };

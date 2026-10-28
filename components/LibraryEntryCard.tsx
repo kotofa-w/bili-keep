@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { getCoverUrl } from "../utils/cover";
 import type { LibraryDecision, LibraryEntry } from "../utils/preference";
 import { ScoreRing } from "./ScoreRing";
@@ -8,6 +8,15 @@ const button =
 const labels = { keep: "已保留", candidate: "候选", observed: "已观察", exclude: "已排除" };
 const time = (seconds: number) =>
   seconds < 60 ? `${Math.round(seconds)} 秒` : `${Math.round(seconds / 60)} 分钟`;
+const playbackPosition = (entry: LibraryEntry) => {
+  const latest = entry.sessions.at(-1);
+  if (!latest) return "";
+  const seconds = Math.max(0, Math.floor(latest.position));
+  const clock = [Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+  return `P${latest.part} · ${clock}`;
+};
 
 function safeResume(entry: LibraryEntry) {
   if (!/^BV[0-9A-Za-z]{10}$/.test(entry.bvid)) return undefined;
@@ -35,9 +44,13 @@ export function LibraryEntryCard({
   const [failedCover, setFailedCover] = useState("");
   const cover = getCoverUrl(entry.cover);
   const href = safeResume(entry);
+  const startHref = href?.split("?")[0];
   const open = (event: MouseEvent<HTMLButtonElement>) => onOpen(entry, event.currentTarget);
   return (
-    <article className="min-w-0 rounded-xl border border-gray-200 bg-white [container-type:inline-size] dark:border-neutral-800 dark:bg-neutral-900">
+    <article
+      aria-label={`视频条目 ${entry.bvid}`}
+      className="min-w-0 rounded-xl border border-gray-200 bg-white [container-type:inline-size] dark:border-neutral-800 dark:bg-neutral-900"
+    >
       <button
         onClick={open}
         aria-label={`查看详情：${entry.title || entry.bvid}`}
@@ -80,13 +93,23 @@ export function LibraryEntryCard({
           </div>
           <ScoreRing entry={entry} />
         </div>
-        <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2 text-xs dark:border-neutral-800">
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-gray-100 pt-2 text-xs dark:border-neutral-800">
           <button
             onClick={open}
             className="rounded py-1 text-gray-600 hover:text-blue-600 dark:text-neutral-300 dark:hover:text-blue-400"
           >
             查看详情
           </button>
+          {startHref && (
+            <a
+              href={startHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="py-1 text-blue-600 dark:text-blue-400"
+            >
+              打开视频 ↗
+            </a>
+          )}
           {href && (
             <a
               href={href}
@@ -94,7 +117,10 @@ export function LibraryEntryCard({
               rel="noopener noreferrer"
               className="rounded py-1 text-blue-600 dark:text-blue-400"
             >
-              继续观看 ↗
+              <span className="block">继续观看 ↗</span>
+              <span className="block text-[10px] text-gray-500 dark:text-neutral-400">
+                {playbackPosition(entry)}
+              </span>
             </a>
           )}
         </div>
@@ -108,16 +134,19 @@ export function LibraryEntryDialog({
   busy,
   onSave,
   onClose,
+  children,
 }: {
   entry: LibraryEntry;
   busy: boolean;
   onSave: (decision: LibraryDecision) => Promise<void>;
   onClose: () => void;
+  children?: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [note, setNote] = useState(entry.decision?.note || "");
   const href = safeResume(entry);
+  const startHref = href?.split("?")[0];
   useEffect(() => {
     const element = dialog.current;
     element?.showModal();
@@ -219,10 +248,21 @@ export function LibraryEntryDialog({
               rel="noopener noreferrer"
               className={`${button} text-blue-600 dark:text-blue-400`}
             >
-              继续观看 ↗
+              继续观看 {playbackPosition(entry)} ↗
+            </a>
+          )}
+          {startHref && (
+            <a
+              href={startHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${button} text-blue-600 dark:text-blue-400`}
+            >
+              打开视频 ↗
             </a>
           )}
         </div>
+        {children}
         <section aria-label="观看会话">
           <h3 className="mb-2 text-sm font-semibold">观看会话 · {entry.sessions.length} 次</h3>
           <ul className="max-h-52 space-y-2 overflow-y-auto rounded-lg bg-gray-50 p-3 text-xs leading-5 text-gray-600 dark:bg-neutral-950 dark:text-neutral-400">

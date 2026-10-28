@@ -19,6 +19,22 @@ export const THEME_MODE = "themeMode";
 export const UPDATE_HISTORY = [
   {
     date: "2026-10-28",
+    version: "2.2.0",
+    changes: [
+      "主动保存单点时间标记与简短说明，按CID确认分P后回跳",
+      "轻量视频标签与筛选，标记Markdown导出及完整v2备份",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    version: "2.1.3",
+    changes: [
+      "资料库默认显示全部记录，支持多关键词、分P标题和视频链接搜索",
+      "新增已观察、有备注筛选与标题排序，回看入口显示分P及播放位置",
+    ],
+  },
+  {
+    date: "2026-10-28",
     version: "2.1.2",
     changes: ["更新用户提供的图标及公开项目说明，补充上游来源与鸣谢"],
   },
