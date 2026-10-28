@@ -236,22 +236,17 @@ try {
     "same-duration SPA part waits for new media identity",
     !(await snapshot(worker)).sessions.some((session) => session.part === 2),
   );
-  const popup = await context.newPage();
-  await popup.goto(`chrome-extension://${new URL(worker.url()).hostname}/popup.html`);
-  await popup.getByRole("textbox", { name: "时间点说明", exact: true }).fill("切P期间保留的说明");
+  let popup = await context.newPage();
   await player.bringToFront();
-  await popup
-    .getByRole("button", { name: "保存当前时间点", exact: true })
-    .evaluate((button) => button.click());
-  await popup.getByText(/保存失败/).waitFor();
+  await popup.goto(`chrome-extension://${new URL(worker.url()).hostname}/popup.html`);
+  await popup.getByText(/读取失败/).waitFor();
   check(
     "marker refuses a switching same-duration part",
     (await markerData(worker)).markers.length === 0,
   );
   check(
-    "failed marker keeps the draft note",
-    (await popup.getByRole("textbox", { name: "时间点说明", exact: true }).inputValue()) ===
-      "切P期间保留的说明",
+    "unbound time point cannot be edited or saved",
+    await popup.getByRole("button", { name: "保存当前时间点", exact: true }).isDisabled(),
   );
   await player.evaluate(async () => {
     await window.fixture.loadSecondPart();
@@ -291,13 +286,75 @@ try {
     "disabled collector stops accumulating sessions",
     JSON.stringify(await snapshot(worker)) === JSON.stringify(stopped),
   );
-  await popup.getByRole("textbox", { name: "时间点说明", exact: true }).fill("单点标记：精彩内容");
   await player.bringToFront();
+  await popup
+    .getByRole("button", { name: "重新取当前时间", exact: true })
+    .evaluate((button) => button.click());
+  await eventually(
+    async () =>
+      !(await popup.getByRole("button", { name: "保存当前时间点", exact: true }).isDisabled()),
+    "time point fixed",
+  );
+  const frozenTimeLabel = await popup.getByLabel("将保存的时间点", { exact: true }).innerText();
+  await popup.getByRole("textbox", { name: "时间点说明", exact: true }).fill("单点标记：精彩内容");
+  await eventually(
+    async () =>
+      JSON.stringify(await worker.evaluate(() => chrome.storage.session.get(null))).includes(
+        "单点标记：精彩内容",
+      ),
+    "popup draft stored before close",
+  );
+  await player.evaluate(() => window.fixture.seek(40));
+  check(
+    "typing a note does not move the frozen time point",
+    (await popup.getByLabel("将保存的时间点", { exact: true }).innerText()) === frozenTimeLabel,
+  );
+  await popup.bringToFront();
+  await popup
+    .getByRole("button", { name: "重新取当前时间", exact: true })
+    .evaluate((button) => button.click());
+  await popup.getByText(/读取失败/).waitFor();
+  check(
+    "failed recapture keeps the prior note and disables save",
+    (await popup.getByRole("textbox", { name: "时间点说明", exact: true }).inputValue()) ===
+      "单点标记：精彩内容" &&
+      (await popup.getByRole("button", { name: "保存当前时间点", exact: true }).isDisabled()),
+  );
+  await popup.close();
+  popup = await context.newPage();
+  await player.bringToFront();
+  await popup.goto(`chrome-extension://${id}/popup.html`);
+  await eventually(
+    async () =>
+      !(await popup.getByRole("button", { name: "保存当前时间点", exact: true }).isDisabled()),
+    "popup draft restored",
+  );
+  check(
+    "reopened popup restores both the note and original frozen time",
+    (await popup.getByRole("textbox", { name: "时间点说明", exact: true }).inputValue()) ===
+      "单点标记：精彩内容" &&
+      (await popup.getByLabel("将保存的时间点", { exact: true }).innerText()) === frozenTimeLabel,
+  );
+  await popup.screenshot({ path: path.join(reports, "popup-fixed-fixture.png"), fullPage: true });
   await popup
     .getByRole("button", { name: "保存当前时间点", exact: true })
     .evaluate((button) => button.click());
   await popup.getByText("时间标记已保存，可在喜好资料库查看。", { exact: true }).waitFor();
   const savedMarker = (await markerData(worker)).markers[0];
+  check("save uses the frozen time instead of the later play position", savedMarker.position < 40);
+  await eventually(
+    async () =>
+      !JSON.stringify(await worker.evaluate(() => chrome.storage.session.get(null))).includes(
+        "单点标记：精彩内容",
+      ),
+    "saved popup draft removed",
+  );
+  check(
+    "successful save clears the matching popup draft",
+    !JSON.stringify(await worker.evaluate(() => chrome.storage.session.get(null))).includes(
+      "单点标记：精彩内容",
+    ),
+  );
   check(
     "paused tracking still allows an explicit point marker",
     savedMarker?.cid === "456" &&
@@ -313,6 +370,15 @@ try {
   const untrackedPlayer = await context.newPage();
   await untrackedPlayer.goto("https://www.bilibili.com/video/BV1xx411c7mE/");
   await untrackedPlayer.waitForFunction(() => document.querySelector("video")?.readyState >= 2);
+  await untrackedPlayer.bringToFront();
+  await popup
+    .getByRole("button", { name: "重新取当前时间", exact: true })
+    .evaluate((button) => button.click());
+  await eventually(
+    async () =>
+      !(await popup.getByRole("button", { name: "保存当前时间点", exact: true }).isDisabled()),
+    "new CID time point fixed",
+  );
   await popup
     .getByRole("textbox", { name: "时间点说明", exact: true })
     .fill("没有观看会话也要回找");
@@ -480,7 +546,15 @@ try {
       .getByRole("textbox", { name: "我的备注" })
       .evaluate((element) => element === document.activeElement),
   );
+  page.once("dialog", (dialog) => dialog.dismiss());
   await page.keyboard.press("Escape");
+  check(
+    "canceling close preserves the open detail and unsaved note",
+    (await page.getByRole("dialog").isVisible()) &&
+      (await page.getByRole("textbox", { name: "我的备注" }).inputValue()) === "尚未保存的备注",
+  );
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "关闭详情", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
   await eventually(
     async () =>
@@ -496,6 +570,10 @@ try {
       .evaluate((button) => button === document.activeElement),
   );
   await page.getByRole("button", { name: "查看详情", exact: true }).click();
+  check(
+    "reopening detail restores the unsaved note draft",
+    (await page.getByRole("textbox", { name: "我的备注" }).inputValue()) === "尚未保存的备注",
+  );
   await page.getByRole("textbox", { name: "我的备注" }).fill("仅模拟验收数据：回找建模教程");
   await page.getByRole("button", { name: "保存备注", exact: true }).click();
   await eventually(
@@ -541,7 +619,14 @@ try {
     "automatic refresh preserves an unsaved tag draft",
     (await tagEditor.inputValue()) === "尚未保存标签",
   );
-  await tagEditor.fill("课程, CMOS");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "关闭详情", exact: true }).click();
+  await page.getByRole("button", { name: "查看详情", exact: true }).click();
+  check(
+    "closing and reopening detail restores its tag draft",
+    (await tagEditor.inputValue()) === "尚未保存标签",
+  );
+  await tagEditor.fill("课程, CMOS, 复习, 器件");
   await page.getByRole("dialog").getByRole("button", { name: "保存标签", exact: true }).click();
   await eventually(
     async () => (await markerData(worker)).tags.some((record) => record.tags.includes("CMOS")),
@@ -549,6 +634,52 @@ try {
   );
   await page.getByRole("button", { name: "关闭详情", exact: true }).click();
   await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+  const taggedCard = page.getByRole("article", { name: "视频条目 BV1xx411c7mD", exact: true });
+  const cardTag = taggedCard.getByRole("button", { name: "按标签筛选：CMOS", exact: true });
+  await cardTag.waitFor({ timeout: 5000 });
+  check(
+    "card limits visible tag buttons and exposes the remaining label",
+    (await taggedCard
+      .getByRole("group", { name: "标签快捷筛选", exact: true })
+      .getByRole("button")
+      .count()) === 3 &&
+      (await taggedCard.locator('[title="器件"]').getAttribute("aria-label")) ===
+        "另有1个标签：器件",
+  );
+  const remainingTags = taggedCard.locator('[title="器件"]');
+  await remainingTags.focus();
+  check(
+    "remaining tag names are visible on keyboard focus",
+    await remainingTags.locator('span[aria-hidden="true"]').isVisible(),
+  );
+  await page.getByRole("textbox", { name: "搜索资料库", exact: true }).fill("参数化");
+  await cardTag.focus();
+  await page.keyboard.press("Enter");
+  check(
+    "card tag selects the shared tag filter",
+    (await page.getByRole("combobox", { name: "筛选标签", exact: true }).inputValue()) === "CMOS" &&
+      (await cardTag.getAttribute("aria-pressed")) === "true",
+  );
+  check(
+    "tag click preserves the keyword and current view",
+    (await page.getByRole("textbox", { name: "搜索资料库", exact: true }).inputValue()) ===
+      "参数化" &&
+      (await page.getByRole("combobox", { name: "筛选状态", exact: true }).inputValue()) === "all",
+  );
+  const markerTag = page
+    .getByRole("region", { name: "时间标记", exact: true })
+    .getByRole("button", { name: "按标签筛选：CMOS", exact: true });
+  check(
+    "marker card shares the selected tag state",
+    (await markerTag.getAttribute("aria-pressed")) === "true",
+  );
+  await markerTag.click();
+  check(
+    "clicking the selected tag clears only the tag filter",
+    (await page.getByRole("combobox", { name: "筛选标签", exact: true }).inputValue()) === "" &&
+      (await page.getByRole("textbox", { name: "搜索资料库", exact: true }).inputValue()) ===
+        "参数化",
+  );
   await page.getByRole("combobox", { name: "筛选标签", exact: true }).selectOption("CMOS");
   await page.getByRole("textbox", { name: "搜索资料库", exact: true }).fill("CMOS");
   check(
@@ -563,6 +694,19 @@ try {
   check(
     "marker list follows the video tag filter",
     (await markerRegion.getByRole("article").count()) === 1,
+  );
+  const markerNoteInput = markerRow.getByRole("textbox", {
+    name: `时间点说明 ${savedMarker.markerId}`,
+    exact: true,
+  });
+  await markerNoteInput.fill("尚未保存的筛选草稿");
+  await page.getByRole("textbox", { name: "搜索资料库", exact: true }).fill("不匹配的临时条件");
+  await markerRow.waitFor({ state: "hidden" });
+  await page.getByRole("textbox", { name: "搜索资料库", exact: true }).fill("CMOS");
+  await markerRow.waitFor();
+  check(
+    "filter round trip preserves an unsaved marker note",
+    (await markerNoteInput.inputValue()) === "尚未保存的筛选草稿",
   );
   await markerRow
     .getByRole("textbox", { name: `时间点说明 ${savedMarker.markerId}`, exact: true })

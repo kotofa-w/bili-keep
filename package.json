@@ -2,7 +2,7 @@
   "name": "bili-keep",
   "description": "B站喜好归档：观看记录、可解释喜好判断与本地回找",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.2.2",
   "license": "GPL-3.0-only",
   "author": "Bilibili History Plugin Contributors and derivative contributors",
   "homepage": "https://github.com/kotofa-w/bili-keep",

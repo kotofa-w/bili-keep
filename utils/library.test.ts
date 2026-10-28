@@ -101,6 +101,47 @@ describe("library persistence", () => {
     await saveLibraryDecision({ ...decision, status: "keep", updatedAt: decision.updatedAt - 1 });
     expect(await getLibrarySnapshot()).toEqual({ sessions: [session], decisions: [decision] });
   });
+  it("allows only one concurrent decision edit for the same expected revision", async () => {
+    const decision = {
+      bvid: "BV1xx411c7mD",
+      status: "keep" as const,
+      updatedAt: 100,
+      note: "原文",
+    };
+    await saveLibraryDecision(decision, 0);
+    const edits = ["页面A", "页面B"].map((note) => ({ ...decision, note, updatedAt: 101 }));
+    const results = await Promise.allSettled(edits.map((edit) => saveLibraryDecision(edit, 100)));
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const winner = results.findIndex((result) => result.status === "fulfilled");
+    const rejected = results.find(
+      (result) => result.status === "rejected",
+    ) as PromiseRejectedResult;
+    expect(rejected.reason.message).toContain("其他页面修改");
+    const saved = (await getLibrarySnapshot()).decisions[0];
+    expect(saved.note).toBe(edits[winner].note);
+    await expect(saveLibraryDecision({ ...decision, note: "过期草稿" }, 100)).rejects.toThrow();
+    expect((await getLibrarySnapshot()).decisions).toEqual([saved]);
+  });
+  it("actually saves a decision edit in the same millisecond and advances its revision", async () => {
+    const decision = {
+      bvid: "BV1xx411c7mD",
+      status: "keep" as const,
+      updatedAt: 100,
+      note: "原文",
+    };
+    vi.spyOn(Date, "now").mockReturnValue(100);
+    try {
+      await saveLibraryDecision(decision, 0);
+      await saveLibraryDecision({ ...decision, note: "新备注" }, 100);
+      const saved = (await getLibrarySnapshot()).decisions[0];
+      expect(saved).toEqual({ ...decision, note: "新备注", updatedAt: 101 });
+      await expect(saveLibraryDecision({ ...decision, note: "重复新建" }, 0)).rejects.toThrow();
+      await saveLibraryDecision({ ...decision, note: "旧调用仍忽略旧修订" });
+      expect((await getLibrarySnapshot()).decisions).toEqual([saved]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
   it("rejects a transaction failure without partially committing the other store", async () => {
     const originalPut = IDBObjectStore.prototype.put;
     const spy = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (

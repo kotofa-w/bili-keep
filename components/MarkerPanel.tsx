@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLibraryDraft } from "../hooks/useLibraryDraft";
 import { deleteVideoMarker, saveVideoMarker, saveVideoTags } from "../utils/library";
 import {
   getLibrarySearchTerms,
@@ -7,6 +8,7 @@ import {
 } from "../utils/libraryQuery";
 import { formatMarkerPosition, markersToMarkdown } from "../utils/markerPresentation";
 import { parseVideoTags, type VideoMarker, type VideoTagRecord } from "../utils/markers";
+import { TagChips } from "./TagChips";
 
 const button =
   "rounded-lg border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800";
@@ -23,21 +25,17 @@ export function VideoTagsEditor({
   record?: VideoTagRecord;
   onChanged: () => Promise<void>;
 }) {
-  const [text, setText] = useState(() => (record?.tags || []).join(", "));
-  const [dirty, setDirty] = useState(false);
+  const draft = useLibraryDraft(
+    `tags:${bvid}`,
+    (record?.tags || []).join(", "),
+    record?.updatedAt || 0,
+  );
+  const { value: text, dirty } = draft;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const revision = useRef(record?.updatedAt || 0);
   const lock = useRef(false);
-  useEffect(() => {
-    if (!dirty) {
-      setText((record?.tags || []).join(", "));
-      revision.current = record?.updatedAt || 0;
-    }
-  }, [record, dirty]);
   const change = (value: string) => {
-    setText(value);
-    setDirty(true);
+    draft.edit(value);
     setMessage("");
   };
   const save = async () => {
@@ -46,20 +44,20 @@ export function VideoTagsEditor({
     setBusy(true);
     setMessage("");
     try {
+      if (draft.conflict || draft.error)
+        throw new Error("标签或草稿已变更，请放弃草稿载入最新标签，或载入最新草稿后检查");
       const next = parseVideoTags({
         bvid,
         tags: text
           .split(/[,，\r\n]/)
           .map((tag) => tag.trim())
           .filter(Boolean),
-        updatedAt: Math.max(Date.now(), revision.current + 1),
+        updatedAt: Math.max(Date.now(), draft.revision + 1),
       });
-      await saveVideoTags(next, revision.current);
-      revision.current = next.updatedAt;
-      await onChanged();
-      setText(next.tags.join(", "));
-      setDirty(false);
+      await saveVideoTags(next, draft.revision);
+      draft.markSaved(next.tags.join(", "), next.updatedAt);
       setMessage("标签已保存");
+      await onChanged().catch((error) => setMessage(`标签已保存，但刷新失败：${errorText(error)}`));
     } catch (error) {
       setMessage(`保存失败：${errorText(error)}。输入内容已保留。`);
     } finally {
@@ -72,14 +70,18 @@ export function VideoTagsEditor({
     .map((tag) => tag.trim())
     .filter(Boolean);
   return (
-    <section aria-label={`视频标签 ${bvid}`} className="space-y-2">
+    <section
+      aria-label={`视频标签 ${bvid}`}
+      data-unsaved={dirty || undefined}
+      className="space-y-2"
+    >
       <label className="block text-sm">
         <span className="mb-2 block font-semibold">视频标签</span>
         <textarea
           aria-label={`编辑标签 ${bvid}`}
           value={text}
           onChange={(event) => change(event.target.value)}
-          disabled={busy}
+          disabled={busy || draft.blocked}
           rows={2}
           className={input}
           placeholder="逗号或换行分隔；最多12个，每个32字"
@@ -101,6 +103,26 @@ export function VideoTagsEditor({
       <button className={button} disabled={busy || !dirty} onClick={() => void save()}>
         {busy ? "保存中…" : "保存标签"}
       </button>
+      {dirty && (
+        <p role="status" className="text-xs">
+          {draft.status}
+        </p>
+      )}
+      {(draft.conflict || draft.error) && (
+        <p role="alert" className="text-xs">
+          {draft.error || "标签已有更新；草稿保留，尚未覆盖最新标签。"}
+        </p>
+      )}
+      {dirty && (
+        <button className={button} disabled={busy} onClick={draft.reset}>
+          放弃标签草稿并载入最新
+        </button>
+      )}
+      {draft.error && (
+        <button className={button} disabled={busy} onClick={draft.reload}>
+          载入最新标签草稿
+        </button>
+      )}
       <p className="text-xs text-gray-500 dark:text-neutral-400">
         移除后点保存；清空可删除全部标签。标签属于整个视频。
       </p>
@@ -117,23 +139,20 @@ function MarkerRow({
   marker,
   tagRecord,
   onChanged,
+  selectedTag,
+  onSelectTag,
 }: {
   marker: VideoMarker;
   tagRecord?: VideoTagRecord;
   onChanged: () => Promise<void>;
+  selectedTag: string;
+  onSelectTag: (tag: string) => void;
 }) {
-  const [note, setNote] = useState(marker.note);
-  const [dirty, setDirty] = useState(false);
+  const draft = useLibraryDraft(`marker:${marker.markerId}`, marker.note, marker.updatedAt);
+  const { value: note, dirty } = draft;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const revision = useRef(marker.updatedAt);
   const lock = useRef(false);
-  useEffect(() => {
-    if (!dirty) {
-      setNote(marker.note);
-      revision.current = marker.updatedAt;
-    }
-  }, [marker, dirty]);
   const run = async (action: () => Promise<void>) => {
     if (lock.current) return;
     lock.current = true;
@@ -159,6 +178,11 @@ function MarkerRow({
           <br />
           保存于 {new Date(marker.createdAt).toLocaleString("zh-CN")}
         </p>
+        <TagChips
+          tags={tagRecord?.tags || []}
+          selectedTag={selectedTag}
+          onSelectTag={onSelectTag}
+        />
       </div>
       <label className="block text-sm">
         <span className="mb-1 block">时间点说明</span>
@@ -167,12 +191,11 @@ function MarkerRow({
           value={note}
           maxLength={1000}
           rows={2}
-          disabled={busy}
+          disabled={busy || draft.blocked}
           className={input}
           placeholder="记下这个时间点值得回看的原因"
           onChange={(event) => {
-            setNote(event.target.value);
-            setDirty(true);
+            draft.edit(event.target.value);
             setMessage("");
           }}
         />
@@ -200,16 +223,19 @@ function MarkerRow({
           disabled={busy || !dirty}
           onClick={() =>
             void run(async () => {
+              if (draft.conflict || draft.error)
+                throw new Error("时间点说明或草稿已变更，请先载入最新内容");
               const next = {
                 ...marker,
                 note,
-                updatedAt: Math.max(Date.now(), revision.current + 1),
+                updatedAt: Math.max(Date.now(), draft.revision + 1),
               };
-              await saveVideoMarker(next, revision.current);
-              revision.current = next.updatedAt;
-              await onChanged();
-              setDirty(false);
+              await saveVideoMarker(next, draft.revision);
+              draft.markSaved(next.note, next.updatedAt);
               setMessage("说明已保存");
+              await onChanged().catch((error) =>
+                setMessage(`说明已保存，但刷新失败：${errorText(error)}`),
+              );
             })
           }
         >
@@ -221,7 +247,8 @@ function MarkerRow({
           onClick={() => {
             if (!window.confirm("删除这个时间标记？视频的喜好判断和观看记录会保留。")) return;
             void run(async () => {
-              await deleteVideoMarker(marker.markerId, revision.current);
+              await deleteVideoMarker(marker.markerId, draft.revision);
+              draft.reset();
               await onChanged();
             });
           }}
@@ -229,6 +256,26 @@ function MarkerRow({
           删除标记
         </button>
       </div>
+      {dirty && (
+        <p role="status" className="text-xs">
+          {draft.status}
+        </p>
+      )}
+      {(draft.conflict || draft.error) && (
+        <p role="alert" className="text-xs">
+          {draft.error || "标记已有更新；草稿保留，尚未覆盖最新说明。"}
+        </p>
+      )}
+      {dirty && (
+        <button className={button} disabled={busy} onClick={draft.reset}>
+          放弃说明草稿并载入最新
+        </button>
+      )}
+      {draft.error && (
+        <button className={button} disabled={busy} onClick={draft.reload}>
+          载入最新说明草稿
+        </button>
+      )}
       {message && (
         <p role="status" className="text-xs leading-5">
           {message}
@@ -252,12 +299,14 @@ export function MarkerPanel({
   keyword,
   tag,
   onChanged,
+  onSelectTag,
 }: {
   markers: VideoMarker[];
   tags: VideoTagRecord[];
   keyword: string;
   tag: string;
   onChanged: () => Promise<void>;
+  onSelectTag: (tag: string) => void;
 }) {
   const [limit, setLimit] = useState(50);
   const tagMap = useMemo(() => new Map(tags.map((record) => [record.bvid, record])), [tags]);
@@ -317,6 +366,8 @@ export function MarkerPanel({
               marker={marker}
               tagRecord={tagMap.get(marker.bvid)}
               onChanged={onChanged}
+              selectedTag={tag}
+              onSelectTag={onSelectTag}
             />
           ))}
         </div>

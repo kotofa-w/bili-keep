@@ -252,7 +252,10 @@ export const getLegacyLibraryBackup = async () => ({
 
 // Every read-and-compare happens inside the same readwrite transaction as its put.
 // IndexedDB serializes overlapping writes across tabs and service-worker restarts.
-const mergeSnapshot = async (snapshot: LibrarySnapshot): Promise<void> => {
+const mergeSnapshot = async (
+  snapshot: LibrarySnapshot,
+  expectedDecisionUpdatedAt?: number,
+): Promise<void> => {
   const db = await openLibrary();
   try {
     const tx = db.transaction(ALL_STORES, "readwrite");
@@ -272,6 +275,7 @@ const mergeSnapshot = async (snapshot: LibrarySnapshot): Promise<void> => {
     const sessionStore = tx.objectStore("sessions");
     const decisionStore = tx.objectStore("decisions");
     let totalRecords = 0;
+    let failure: unknown;
     for (const name of ALL_STORES) {
       const count = tx.objectStore(name).count();
       count.onsuccess = () => {
@@ -292,15 +296,32 @@ const mergeSnapshot = async (snapshot: LibrarySnapshot): Promise<void> => {
     for (const decision of decisions.values()) {
       const request = decisionStore.get(decision.bvid);
       request.onsuccess = () => {
-        const previous = request.result as LibraryDecision | undefined;
-        if (!previous && ++totalRecords > MAX_RECORDS) {
+        try {
+          const previous = request.result as LibraryDecision | undefined;
+          checkRevision(previous, expectedDecisionUpdatedAt);
+          if (!previous && ++totalRecords > MAX_RECORDS) invalid();
+          if (expectedDecisionUpdatedAt !== undefined) {
+            decisionStore.put(
+              parseDecision({
+                ...decision,
+                updatedAt: previous
+                  ? Math.max(decision.updatedAt, previous.updatedAt + 1, Date.now())
+                  : decision.updatedAt,
+              }),
+            );
+          } else if (!previous || decision.updatedAt > previous.updatedAt)
+            decisionStore.put(decision);
+        } catch (error) {
+          failure = error;
           tx.abort();
-          return;
         }
-        if (!previous || decision.updatedAt > previous.updatedAt) decisionStore.put(decision);
       };
     }
-    await done;
+    try {
+      await done;
+    } catch (error) {
+      throw failure || error;
+    }
   } finally {
     db.close();
   }
@@ -309,8 +330,11 @@ const mergeSnapshot = async (snapshot: LibrarySnapshot): Promise<void> => {
 export const savePlaybackSession = async (session: PlaybackSession): Promise<void> => {
   await mergeSnapshot({ sessions: [parseSession(session)], decisions: [] });
 };
-export const saveLibraryDecision = async (decision: LibraryDecision): Promise<void> => {
-  await mergeSnapshot({ sessions: [], decisions: [parseDecision(decision)] });
+export const saveLibraryDecision = async (
+  decision: LibraryDecision,
+  expectedUpdatedAt?: number,
+): Promise<void> => {
+  await mergeSnapshot({ sessions: [], decisions: [parseDecision(decision)] }, expectedUpdatedAt);
 };
 export const importLibrarySnapshot = async (value: unknown): Promise<void> => {
   const snapshot = parseLibraryBackup(value);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { hasUnsavedLibraryDrafts } from "../utils/libraryDraft";
 import { LibraryEntryCard, LibraryEntryDialog } from "../components/LibraryEntryCard";
 import { MarkerPanel, VideoTagsEditor } from "../components/MarkerPanel";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../utils/library";
 import {
   queryLibraryEntries,
+  matchesLibraryTag,
   type LibrarySort,
   type LibraryViewFilter,
 } from "../utils/libraryQuery";
@@ -63,22 +65,35 @@ export default function Library() {
   }, []);
 
   const run = useCallback(async (action: () => Promise<void>) => {
-    if (lock.current) return;
+    if (lock.current) return false;
     lock.current = true;
     // Invalidate any pending poll before a mutation can change the stored snapshot.
     refreshSequence.current += 1;
     setBusy(true);
     try {
       await action();
+      return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "操作失败，请重试", {
         id: "library-error",
       });
+      return false;
     } finally {
       lock.current = false;
       setBusy(false);
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    const protectDrafts = (event: BeforeUnloadEvent) => {
+      if (hasUnsavedLibraryDrafts()) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", protectDrafts);
+    return () => window.removeEventListener("beforeunload", protectDrafts);
   }, []);
 
   useEffect(() => {
@@ -119,6 +134,14 @@ export default function Library() {
       options.set(value.normalize("NFKC").toLowerCase(), value);
     return [...options.values()].sort((a, b) => a.localeCompare(b, "zh-CN"));
   }, [extras.tags, tagFilter]);
+  const tagsByVideo = useMemo(
+    () => new Map(extras.tags.map((record) => [record.bvid, record.tags])),
+    [extras.tags],
+  );
+  const chooseTag = (tag: string) => {
+    setTagFilter((current) => (current && matchesLibraryTag([tag], current) ? "" : tag));
+    setPage(1);
+  };
   const pages = Math.max(1, Math.ceil(filtered.length / 40));
   const currentPage = Math.min(page, pages);
   const visible = filtered.slice((currentPage - 1) * 40, currentPage * 40);
@@ -132,10 +155,18 @@ export default function Library() {
     searchInput.current?.focus();
   };
 
-  const save = async (decision: LibraryDecision) =>
+  const save = async (decision: LibraryDecision, expectedRevision: number) =>
     run(async () => {
-      await saveLibraryDecision(decision);
-      await refresh();
+      const fresh = await getLibrarySnapshot();
+      const latest = fresh.decisions.find((item) => item.bvid === decision.bvid);
+      if ((latest?.updatedAt || 0) !== expectedRevision) {
+        setSnapshot(fresh);
+        throw new Error("备注已有更新，未覆盖最新内容；请刷新后检查或放弃草稿载入最新");
+      }
+      await saveLibraryDecision(decision, expectedRevision);
+      await refresh().catch(() =>
+        toast.error("备注已保存，但刷新失败，请手动刷新", { id: "library-error" }),
+      );
       toast.success("已保存", { id: "library-save" });
     });
 
@@ -312,6 +343,9 @@ export default function Library() {
             <LibraryEntryCard
               key={entry.bvid}
               entry={entry}
+              tags={tagsByVideo.get(entry.bvid) || []}
+              selectedTag={tagFilter}
+              onSelectTag={chooseTag}
               onOpen={(value, trigger) => {
                 detailTrigger.current = trigger;
                 setSelected(value);
@@ -375,6 +409,7 @@ export default function Library() {
           keyword={query}
           tag={tagFilter}
           onChanged={refresh}
+          onSelectTag={chooseTag}
         />
       )}
     </div>

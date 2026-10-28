@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { getCoverUrl } from "../utils/cover";
+import { useLibraryDraft } from "../hooks/useLibraryDraft";
 import type { LibraryDecision, LibraryEntry } from "../utils/preference";
 import { ScoreRing } from "./ScoreRing";
+import { TagChips } from "./TagChips";
 
 const button =
   "rounded-lg border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800";
@@ -37,9 +39,15 @@ function safeResume(entry: LibraryEntry) {
 export function LibraryEntryCard({
   entry,
   onOpen,
+  tags,
+  selectedTag,
+  onSelectTag,
 }: {
   entry: LibraryEntry;
   onOpen: (entry: LibraryEntry, trigger: HTMLButtonElement) => void;
+  tags: string[];
+  selectedTag: string;
+  onSelectTag: (tag: string) => void;
 }) {
   const [failedCover, setFailedCover] = useState("");
   const cover = getCoverUrl(entry.cover);
@@ -84,6 +92,7 @@ export function LibraryEntryCard({
         <p className="mt-1 truncate text-xs text-gray-500 dark:text-neutral-400">
           {entry.author || "未知 UP 主"}
         </p>
+        <TagChips tags={tags} selectedTag={selectedTag} onSelectTag={onSelectTag} />
         <div className="mt-3 flex items-center justify-between gap-2">
           <div className="min-w-0 text-xs leading-5 text-gray-500 dark:text-neutral-400">
             <p>
@@ -138,27 +147,65 @@ export function LibraryEntryDialog({
 }: {
   entry: LibraryEntry;
   busy: boolean;
-  onSave: (decision: LibraryDecision) => Promise<void>;
+  onSave: (decision: LibraryDecision, expectedRevision: number) => Promise<boolean>;
   onClose: () => void;
   children?: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  const [note, setNote] = useState(entry.decision?.note || "");
+  const draft = useLibraryDraft(
+    `note:${entry.bvid}`,
+    entry.decision?.note || "",
+    entry.decision?.updatedAt || 0,
+  );
+  const [message, setMessage] = useState("");
   const href = safeResume(entry);
   const startHref = href?.split("?")[0];
   useEffect(() => {
     const element = dialog.current;
     element?.showModal();
   }, []);
-  const save = (status: LibraryDecision["status"]) =>
-    onSave({ bvid: entry.bvid, status, note, updatedAt: Date.now() });
+  const save = async (status: LibraryDecision["status"]) => {
+    if (draft.conflict || draft.error) {
+      setMessage("备注已有更新，请先放弃草稿载入最新备注，或载入最新草稿后检查。未覆盖已有内容。");
+      return;
+    }
+    const decision = {
+      bvid: entry.bvid,
+      status,
+      note: draft.value,
+      updatedAt: Math.max(Date.now(), draft.revision + 1),
+    };
+    if (await onSave(decision, draft.revision)) {
+      draft.markSaved(decision.note, decision.updatedAt);
+      setMessage("备注已保存");
+    } else {
+      setMessage("保存失败或资料已有更新，未保存的备注仍保留；可刷新后检查或放弃草稿载入最新。");
+    }
+  };
+  const requestClose = () => {
+    const active = document.activeElement;
+    if (
+      (draft.dirty || dialog.current?.querySelector('[data-unsaved="true"]')) &&
+      !window.confirm(
+        "还有未保存的备注或标签，确定关闭详情？草稿会在本标签页保留，重新打开可继续；仅内存草稿在刷新页面后可能丢失。",
+      )
+    ) {
+      if (active instanceof HTMLElement) active.focus();
+      return;
+    }
+    dialog.current?.close();
+  };
   const interaction = entry.breakdown.interactions;
   return (
     <dialog
       ref={dialog}
       aria-labelledby={titleId}
       onClose={onClose}
+      onCancel={(event) => {
+        event.preventDefault();
+        requestClose();
+      }}
       className="m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto rounded-2xl border border-gray-200 bg-white p-0 text-gray-900 shadow-2xl [container-type:inline-size] backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
     >
       <div className="flex items-start justify-between gap-4 border-b border-gray-200 p-5 dark:border-neutral-800">
@@ -174,7 +221,7 @@ export function LibraryEntryDialog({
           autoFocus
           aria-label="关闭详情"
           className={`${button} shrink-0`}
-          onClick={() => dialog.current?.close()}
+          onClick={requestClose}
         >
           关闭
         </button>
@@ -215,15 +262,51 @@ export function LibraryEntryDialog({
         <label className="block text-sm">
           <span className="mb-2 block font-semibold">我的备注</span>
           <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
+            aria-label="我的备注"
+            value={draft.value}
+            onChange={(event) => {
+              draft.edit(event.target.value);
+              setMessage("");
+            }}
             maxLength={2000}
             rows={3}
-            disabled={busy}
+            disabled={busy || draft.blocked}
             placeholder="为什么想留下这个视频？"
             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-950"
           />
         </label>
+        {draft.dirty && (
+          <p role="status" className="text-xs">
+            {draft.status}
+          </p>
+        )}
+        {(draft.conflict || draft.error) && (
+          <p role="alert" className="text-xs">
+            {draft.error || "备注已有更新；草稿保留，尚未覆盖最新备注。"}
+          </p>
+        )}
+        {draft.dirty && (
+          <button
+            className={button}
+            disabled={busy}
+            onClick={() => {
+              draft.reset();
+              setMessage("");
+            }}
+          >
+            放弃备注草稿并载入最新
+          </button>
+        )}
+        {draft.error && (
+          <button className={button} disabled={busy} onClick={draft.reload}>
+            载入最新备注草稿
+          </button>
+        )}
+        {message && (
+          <p role="status" className="text-xs">
+            {message}
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           <button className={button} disabled={busy} onClick={() => void save("keep")}>
             保留

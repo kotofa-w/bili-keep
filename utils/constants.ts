@@ -19,6 +19,19 @@ export const THEME_MODE = "themeMode";
 export const UPDATE_HISTORY = [
   {
     date: "2026-10-28",
+    version: "2.2.2",
+    changes: ["视频与时间标记卡片显示标签，点击筛选、再次点击取消，并保留现有搜索条件"],
+  },
+  {
+    date: "2026-10-28",
+    version: "2.2.1",
+    changes: [
+      "先固定并显示时间点再填写说明，支持重新取当前时间及短期草稿恢复",
+      "保护未保存的备注、标记说明和标签，关闭详情提示并保留草稿",
+    ],
+  },
+  {
+    date: "2026-10-28",
     version: "2.2.0",
     changes: [
       "主动保存单点时间标记与简短说明，按CID确认分P后回跳",
