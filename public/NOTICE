@@ -16,3 +16,19 @@ Current derivative project:
 - Main changes: product copy, analytics for Bilibili history records, cloud-sync guide and SDK, Safari compatibility, four-browser release packaging, privacy and review documents.
 
 This project is not affiliated with, endorsed by, or sponsored by Bilibili, Shanghai Hode Information Technology Co., Ltd., Shanghai Kuanyu Digital Technology Co., Ltd., or their affiliates.
+
+Additional derivative: Bili Keep (2026-10-28).
+Based on rmqg/bilibili-history-sync commit bda07e3dc020976ecbe53bd34673114458994a13.
+Changes: ordinary-video playback collection, local preference library, heuristic scoring,
+manual decisions and notes, and separate library backup/restore. GPL-3.0-only continues to apply.
+
+Bili Keep public distribution notes (version 2.1.2):
+Repository: https://github.com/kotofa-w/bili-keep
+Direct upstream: https://github.com/rmqg/bilibili-history-sync (GPL-3.0-only),
+baseline commit bda07e3dc020976ecbe53bd34673114458994a13.
+Earlier upstream: https://github.com/mundane799699/bilibili-history-wxt (MIT License).
+Thanks to the authors, maintainers, and contributors of both upstream projects.
+Further changes include compact cover cards, score-contribution diagrams, detail dialogs,
+and HTTPS normalization of trusted Bilibili CDN cover URLs.
+The icon was supplied by the user; its original author and separate license were not provided.
+The software GPL license does not grant rights to third-party material depicted in the icon.

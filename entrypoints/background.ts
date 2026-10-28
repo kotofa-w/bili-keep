@@ -10,6 +10,8 @@ import {
 import { openDB, putHistoryAndWatchEvent } from "../utils/db";
 import { getStorageValue, setStorageValue } from "../utils/storage";
 import { HistoryItem } from "../utils/types";
+import { getVideoDetails, getVideoInteractions, isVideoPage } from "../utils/captureApi";
+import { savePlaybackSession } from "../utils/library";
 import {
   getIncrementalCutoff,
   isFullReconcileDue,
@@ -93,7 +95,33 @@ export default defineBackground(() => {
     await intervalSync(syncInterval);
   });
 
-  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (typeof message?.action === "string" && message.action.startsWith("capture.")) {
+      if (sender.id !== browser.runtime.id || !isVideoPage(sender.url)) {
+        sendResponse({ success: false, error: "采集来源无效" });
+        return false;
+      }
+      const action = async () => {
+        // A pause must still commit the cumulative snapshot collected before the toggle.
+        if (message.action === "capture.save") {
+          await savePlaybackSession(message.session);
+          return null;
+        }
+        if (
+          (await browser.storage.local.get("biliKeepTrackingEnabled")).biliKeepTrackingEnabled ===
+          false
+        ) {
+          throw new Error("自动记录已暂停");
+        }
+        if (message.action === "capture.video") return getVideoDetails(message.bvid, message.part);
+        if (message.action === "capture.interactions") return getVideoInteractions(message.bvid);
+        throw new Error("未知采集操作");
+      };
+      action()
+        .then((data) => sendResponse({ success: true, data }))
+        .catch((error) => sendResponse({ success: false, error: getErrorMessage(error) }));
+      return true;
+    }
     if (message.action === "syncHistory") {
       handleSyncHistory(message)
         .then(sendResponse)
@@ -245,6 +273,11 @@ export default defineBackground(() => {
           const db = await openDB();
 
           const tx = db.transaction(["history", "watchEvents"], "readwrite");
+          const completed = new Promise((resolve, reject) => {
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error);
+          });
           const historyStore = tx.objectStore("history");
           const watchEventStore = tx.objectStore("watchEvents");
 
@@ -276,10 +309,7 @@ export default defineBackground(() => {
             message: `正在检查并更新，已经检查 ${totalSynced} 条记录`,
           });
 
-          await new Promise((resolve, reject) => {
-            tx.oncomplete = resolve;
-            tx.onerror = () => reject(tx.error);
-          });
+          await completed;
 
           await new Promise((resolve) => setTimeout(resolve, 1000));
 

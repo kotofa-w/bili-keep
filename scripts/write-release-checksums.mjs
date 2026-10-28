@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
-const baseName = `bilibili-history-save-analysis-${packageJson.version}`;
+const baseName = `${packageJson.name}-${packageJson.version}`;
 const files = [
   `${baseName}-chrome.zip`,
   `${baseName}-edge.zip`,

@@ -18,6 +18,24 @@ export const THEME_MODE = "themeMode";
 
 export const UPDATE_HISTORY = [
   {
+    date: "2026-10-28",
+    version: "2.1.2",
+    changes: ["更新用户提供的图标及公开项目说明，补充上游来源与鸣谢"],
+  },
+  {
+    date: "2026-10-28",
+    version: "2.1.1",
+    changes: [
+      "喜好资料库封面卡片、评分构成环图及悬停数据，点击查看详细依据和备注",
+      "兼容B站HTTP封面地址",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    version: "2.1.0",
+    changes: ["Bili Keep初版：有效观看采集、喜好资料库、手动保留和独立本地备份"],
+  },
+  {
     date: "2026-07-10",
     version: "2.0.1",
     changes: [

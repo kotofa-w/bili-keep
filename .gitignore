@@ -27,3 +27,21 @@ stats-*.json
 *.njsproj
 *.sln
 *.sw?
+
+# Local workspace: user exports, release snapshots, caches and scratch work
+/data/
+/outputs/
+/.cache/
+/work/
+
+# Local collaboration records and machine-specific tooling are not public source
+/verification/
+/01_PROJECT.md
+/02_STATUS.md
+/03_HISTORY.md
+/04_FILE_INDEX.md
+/AGENTS.md
+/CLAUDE.md
+/.mcp.json
+/.vscode/
+/docs/initial-plan.md

@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { auditSourcePackage } from "./audit-source-package.mjs";
 
 const root = process.cwd();
 const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
 const version = packageJson.version;
-const name = "哔哩哔哩历史记录保存与分析";
+const name = "Bili Keep · B站喜好归档";
+const baseName = `${packageJson.name}-${version}`;
 const targets = ["chrome-mv3", "edge-mv3", "firefox-mv2", "safari-mv2"];
 
 const assert = (condition, message) => {
@@ -31,7 +33,7 @@ for (const target of targets) {
   if (target === "firefox-mv2") {
     const browserSpecificSettings = manifest.browser_specific_settings;
     const gecko = browserSpecificSettings?.gecko;
-    assert(gecko?.id === "bilibili-history-sync@rmqg.org", "Firefox ID 不正确");
+    assert(gecko?.id === "bili-keep@kotofa-w.github.io", "Firefox ID 不正确");
     assert(gecko?.strict_min_version === "140.0", "Firefox 最低版本不正确");
     assert(
       browserSpecificSettings?.gecko_android?.strict_min_version === "142.0",
@@ -81,11 +83,11 @@ for (const requiredFile of [
 }
 
 for (const browser of ["chrome", "edge", "firefox", "safari"]) {
-  await stat(
-    path.join(root, ".output", `bilibili-history-save-analysis-${version}-${browser}.zip`),
-  );
+  await stat(path.join(root, ".output", `${baseName}-${browser}.zip`));
 }
-await stat(path.join(root, ".output", `bilibili-history-save-analysis-${version}-sources.zip`));
+const sourcesPath = path.join(root, ".output", `${baseName}-sources.zip`);
+await stat(sourcesPath);
+await auditSourcePackage(await readFile(sourcesPath));
 const checksumFile = await readFile(path.join(root, ".output", "SHA256SUMS.txt"), "utf8");
 const checksumEntries = new Map(
   checksumFile

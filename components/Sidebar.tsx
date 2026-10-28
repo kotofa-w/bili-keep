@@ -1,10 +1,15 @@
-import { BarChart3, HistoryIcon, Moon, SettingsIcon, Sun } from "lucide-react";
+import { BarChart3, Bookmark, HistoryIcon, Moon, SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 import { THEME_MODE, UPDATE_HISTORY } from "../utils/constants";
 import { getStorageValue } from "../utils/storage";
 import { setTheme, type ThemeMode } from "../utils/theme";
 
 const navItems = [
+  {
+    title: "喜好资料库",
+    icon: <Bookmark className="w-4 h-4" />,
+    to: "/library",
+  },
   {
     title: "历史记录",
     icon: <HistoryIcon className="w-4 h-4" />,
@@ -52,11 +57,14 @@ export const Sidebar = ({ activePath }: SidebarProps) => {
 
   return (
     <aside className="fixed top-0 left-0 w-40 bg-gray-100 dark:bg-[#141414] dark:text-neutral-100 flex-shrink-0 h-full">
-      <div className="border-b border-gray-200 px-4 py-4 dark:border-neutral-800">
-        <p className="text-sm font-semibold leading-5 text-gray-900 dark:text-neutral-100">
-          哔哩哔哩
-        </p>
-        <p className="text-xs leading-5 text-gray-500 dark:text-neutral-400">历史记录保存与分析</p>
+      <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-4 dark:border-neutral-800">
+        <img src="/icon/32.png" alt="" className="h-8 w-8 shrink-0 rounded-lg" />
+        <div>
+          <p className="text-sm font-semibold leading-5 text-gray-900 dark:text-neutral-100">
+            Bili Keep
+          </p>
+          <p className="text-xs leading-5 text-gray-500 dark:text-neutral-400">喜好归档</p>
+        </div>
       </div>
 
       <nav className="space-y-2 p-4">

@@ -1,107 +1,96 @@
-<div align="center">
-  <img src="public/icon/128.png" alt="哔哩哔哩历史记录保存与分析" width="120" />
+<p align="center"><img src="public/icon/128.png" width="80" height="80" alt="Bili Keep 图标"></p>
 
-  <h1>哔哩哔哩历史记录保存与分析</h1>
+# Bili Keep · B站喜好归档
 
-  <p>
-    <b>保存哔哩哔哩历史记录，查看观看进度、视频时长、分区和 UP 主分析</b>
-    <br/>
-    Chrome / Edge / Firefox 商店扩展，Safari 可免费自行签名安装
-  </p>
-</div>
+自动记录普通视频的观看投入，在本机整理可能喜欢的视频，方便以后回找。
 
----
-
-## 简介
-
-哔哩哔哩网页端能查看的历史记录有限。这个扩展会把历史记录保存到当前浏览器，方便长期查找、按日期筛选、查看记录分析和导出备份。
-
-扩展不会删除或修改你哔哩哔哩账号里的记录。数据默认只保存在当前浏览器；只有主动配置并使用云端同步时，才会上传到你自己的云端地址。
+基于 [rmqg/bilibili-history-sync](https://github.com/rmqg/bilibili-history-sync) 二次开发，保留原有历史同步、检索和分析。当前版本 **2.1.2**，面向桌面 Chrome / Edge。本项目非哔哩哔哩官方产品。
 
 ## 功能
 
-- 自动保存新的哔哩哔哩历史记录，也可以重新检查并保存全部历史
-- 在当前浏览器中长期保存历史记录
-- 按标题、UP 主、BV 号、AV 号、日期和内容类型查找
-- 分析普通视频的长度、观看进度、看完比例、常看的分区和 UP 主
-- 支持备份文件和表格文件导出：备份文件以后可以恢复，表格文件适合用 Excel、Numbers 或分析工具打开
-- 默认只在本机保存；可选配置个人云端同步
-- 可随时删除云端副本并清除本机保存的云端同步设置
-- 支持 Safari / Chrome / Edge / Firefox 构建
+- 记录实际播放、前台 / 后台 / 画中画、有效覆盖区间及分 P 位置；暂停、缓冲和拖动跳转不计作已观看内容。
+- 用封面网格浏览候选与保留视频；评分环可悬停或键盘聚焦查看覆盖、投入、互动和重访的贡献。
+- 点击封面、标题或“查看详情”查看判断依据和会话，编辑备注，手动保留、排除或恢复自动判断。
+- 搜索标题、UP 主、BV 号和备注，按时间或分数排序；“继续观看”在新标签页打开最近分 P 和播放位置。
+- 本地保存，支持 JSON 备份与合并恢复；无需 API key，不下载视频文件，不自动点赞、投币或收藏。
 
-## 使用
+![喜好资料库封面网格，使用模拟数据](docs/images/library.png)
 
-1. 登录[哔哩哔哩网页版](https://www.bilibili.com)。
-2. 安装并启用扩展。
-3. 点击浏览器工具栏中的扩展图标。
-4. 点击「保存历史记录」，第一次使用建议勾选「重新保存全部历史」。
-5. 点击「打开记录与分析」，查看、搜索、分析和导出数据。
+_资料库示例：模拟数据。_
 
-## 安装
+![视频详情和评分依据，使用模拟数据](docs/images/detail.png)
 
-| 浏览器  | 获取方式                                                                                           |
-| ------- | -------------------------------------------------------------------------------------------------- |
-| Chrome  | 已提交 Chrome Web Store，审核完成后开放商店安装                                                    |
-| Edge    | 已提交 Microsoft Edge Add-ons，审核完成后开放商店安装                                              |
-| Firefox | 已提交 Firefox Add-ons，审核完成后开放商店安装                                                     |
-| Safari  | 使用免费 Apple Account 在自己的 Mac 上签名安装，参见 [Safari 免费安装指南](docs/safari-install.md) |
+_详情示例：模拟数据。_
 
-审核期间，开发者可以从 [GitHub Releases](https://github.com/rmqg/bilibili-history-sync/releases/latest) 获取已校验的构建包，或按下面的本地开发方式构建。Chrome、Edge 和 Firefox 的 ZIP 需要通过浏览器开发者模式加载，不能像商店版本一样直接双击安装。不要安装来源不明的第三方打包版本。
+## 安装与使用
 
-## 本地开发
+需要 **Node.js >= 24** 和项目 `package.json` 指定的 pnpm 版本。在源码根目录运行：
 
-```bash
-pnpm install
-pnpm dev
+```sh
+pnpm install --frozen-lockfile
+pnpm build
 ```
 
-常用命令：
+在 Chrome 打开 `chrome://extensions/`，开启“开发者模式”，选择“加载已解压的扩展程序”，加载 `.output/chrome-mv3`。Edge 可运行 `pnpm build:edge`，在 `edge://extensions/` 加载 `.output/edge-mv3`。
 
-| 命令                  | 说明                                          |
-| --------------------- | --------------------------------------------- |
-| `pnpm dev`            | Chrome 开发模式                               |
-| `pnpm dev:firefox`    | Firefox 开发模式                              |
-| `pnpm compile`        | TypeScript 类型检查                           |
-| `pnpm format:check`   | Prettier 校验                                 |
-| `pnpm build`          | Chrome 生产构建                               |
-| `pnpm build:safari`   | Safari 生产构建                               |
-| `pnpm build:firefox`  | Firefox 生产构建                              |
-| `pnpm safari:install` | 使用免费 Apple Account 签名并安装 Safari 版本 |
+刷新已经打开的 B 站普通视频页面，正常播放后点击扩展图标进入喜好资料库。默认显示候选与已保留视频，切换“全部”可查看尚未成为候选的记录；也可随时暂停自动记录。
 
-加载本地扩展：Chrome 打开 `chrome://extensions/`，选择「加载已解压的扩展程序」，加载 `.output/chrome-mv3-dev`。
+更新时构建并重新加载**原目录中的同一个扩展**，然后刷新 B 站页面。更换加载目录前先导出资料库，切换后合并恢复。完整步骤及排查见 [安装与更新](docs/INSTALL.md)。
 
-Safari 本机安装：先在 **Xcode > Settings > Apple Accounts** 登录 Apple Account，再运行 `pnpm safari:install`。完整步骤和更新方式见 [Safari 免费安装指南](docs/safari-install.md)。
+## 喜好分怎么算
 
-## 技术栈
+分数是可解释的启发式规则，**不是喜欢概率**，也未按个人样本校准。
 
-- [WXT](https://wxt.dev)
-- React 19
-- TailwindCSS 3
-- TypeScript
-- IndexedDB
-- `browser.alarms`
+观看分最多 60 分，由“有效覆盖率”和“持续投入”加权组成。投入只计前台及画中画的真实播放时间，后台不计分；持续投入达到目标后该项不再增加。
 
-## 隐私
+| 已观察分 P 的总时长  | 覆盖 / 投入权重 | 投入目标           |
+| -------------------- | --------------- | ------------------ |
+| ≤ 3 分钟             | 80% / 20%       | min(时长, 60 秒)   |
+| > 3 分钟且 ≤ 20 分钟 | 60% / 40%       | min(时长, 300 秒)  |
+| > 20 分钟            | 35% / 65%       | min(时长, 1200 秒) |
 
-历史记录默认仅保存在当前浏览器。可选云端同步只会在用户主动配置自己的 HTTPS 地址并点击同步后运行。完整说明见 [隐私政策](PRIVACY.md)。
-
-## 发布
-
-四浏览器打包、商店文案、隐私字段和提交步骤见 [发布指南](docs/release/publishing-guide.md)。
-逐项人工测试见 [发布前人工测试清单](docs/release/manual-test-checklist.md)。
-
-```bash
-pnpm release:package
+```text
+观看分 = 60 × [覆盖权重 × 有效覆盖率 + 投入权重 × min(有效投入 / 投入目标, 1)]
+总分 = min(100, round(观看分 + 互动分 + 重访分))
 ```
 
-设置页提供的 Cloudflare Worker 部署源码位于 [`cloudflare-worker/`](cloudflare-worker/)。
+- **互动分**：本人点赞 +15、投币 +30、收藏 +40，取最强一项，不叠加。
+- **重访分**：至少两次前台观看各满 10 秒，且开始时间间隔至少 30 分钟，+10。
+- **状态**：总分 ≥ 50 且有效投入 ≥ min(10 秒, 已观察总时长)，成为候选；已观察到收藏或手动保留时为“已保留”；手动排除优先。无时长的记录不自动进入候选。
 
-## 来源与二次开发
+有效覆盖按 CID 合并重复区间，拖动不补齐跳过内容。多 P 视频只计算实际观察到的分 P，不代表整套课程完成率。原始合计可能超过 100，界面分数封顶为 100；此时评分环按原始合计展示各项贡献。
 
-本项目基于现有 MTI/Bilibili 历史记录扩展项目二次开发。当前仓库能确认的上游项目为 [Bilibili 无限历史记录 / bilibili-history-wxt](https://github.com/mundane799699/bilibili-history-wxt)，许可证为 MIT。
+## 数据与隐私
 
-这版主要调整为“哔哩哔哩历史记录保存与分析”：移除与当前定位无关的页面，补充观看分析、云端同步说明、Safari 兼容处理、四浏览器发布包和审核文档。详细署名见 [NOTICE](NOTICE)。
+喜好资料库保存在当前浏览器的独立 IndexedDB `biliKeepLibrary`，包括观看会话、互动快照、手动状态和备注。上游历史使用 `bilibiliHistory`，两者分开保存，历史接口的 `progress` 不会被当作真实观看证据。
 
-## License
+使用资料库页的“导出备份”和“合并恢复备份”迁移资料库。导入先校验再同事务合并，同 ID 保留较新快照，不清空已有记录。卸载扩展、清除扩展数据或删除浏览器配置可能丢失本地数据，请定期导出。
 
-当前组合版本按 GPL-3.0-only 发布，见 [LICENSE](LICENSE)。上游 MIT 代码及此前版本的 MIT 授权文本保留在 [LICENSE-MIT](LICENSE-MIT)，来源与署名见 [NOTICE](NOTICE)。
+记录保存在本机，但读取历史、本人互动状态和封面仍会请求 B 站及其 CDN。保留的可选云同步只覆盖上游历史，由用户主动配置；**不包含喜好资料库**，不能替代资料库 JSON 备份。扩展不调用 LLM。
+
+## 限制与验证
+
+仅采集桌面网页 `https://www.bilibili.com/video/` 下的普通视频；手机 App、番剧、直播和旧历史不能补出真实观看区间。采集依赖播放器 DOM 和只读接口，B 站更新、登录状态、网络或风控可能影响记录与互动查询。未知互动不当作否定证据；历史点赞及离开页面前的互动可能未能及时观察到。异常关闭时最近约 5 秒的播放可能尚未保存。
+
+既有版本曾通过 **36 项单元测试和 23 项隔离浏览器检查**。隔离检查使用模拟 B 站页面/API，覆盖扩展、媒体播放、IndexedDB 与界面；这些是已有验证记录，不等于当前版本所有场景或真实 B 站环境均已通过。
+
+开发检查：
+
+```sh
+pnpm test
+pnpm compile
+pnpm build
+```
+
+隔离检查入口为 `scripts/browser-smoke.mjs`，需要 Playwright 和支持加载开发扩展的 Chromium / Edge；可通过 `PLAYWRIGHT_MODULE`、`BROWSER_EXECUTABLE` 指定已有环境。格式化仅针对实际修改文件，避免无关文件的换行改动。
+
+## 来源、鸣谢与许可证
+
+感谢以下项目的作者、维护者和贡献者：
+
+- 直接上游：[rmqg/bilibili-history-sync](https://github.com/rmqg/bilibili-history-sync)。Bili Keep 基于提交 [`bda07e3`](https://github.com/rmqg/bilibili-history-sync/commit/bda07e3dc020976ecbe53bd34673114458994a13)，沿用历史同步、检索、分析及扩展基础；许可证为 **GPL-3.0-only**。
+- 更早上游：[mundane799699/bilibili-history-wxt](https://github.com/mundane799699/bilibili-history-wxt)。感谢其历史记录扩展基础，原始代码适用 **MIT License**，相关版权和许可文字继续保留。
+
+Bili Keep 新增真实播放采集、独立喜好资料库、规则评分、封面网格与详情、手动整理和资料库备份。软件按 [GPL-3.0-only](LICENSE) 分发，保留 [MIT 许可证](LICENSE-MIT) 与 [来源声明](NOTICE)；分发修改构建时应同时提供对应源码。
+
+图标由使用者提供，原作者及独立许可信息尚未提供；软件 GPL 许可不构成对图标内第三方素材的授权。

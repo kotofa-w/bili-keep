@@ -55,9 +55,10 @@ function App() {
       <Toaster position="top-center" />
       <div className="flex w-72 flex-col gap-3">
         <div>
-          <h2 className="text-lg font-bold leading-tight">哔哩哔哩历史记录保存与分析</h2>
+          <h2 className="text-lg font-bold leading-tight">Bili Keep · 喜好归档</h2>
           <p className="mt-1 text-xs leading-5 text-gray-500">
-            把历史记录保存到这台电脑，方便查找、备份和分析。只有你主动使用云端同步时，记录才会上传到你配置的云端。
+            自动记录普通视频的观看投入，在本机整理喜好；未下载视频，无需 API
+            key。原有历史同步和分析仍可使用。
           </p>
         </div>
         <button
@@ -65,7 +66,7 @@ function App() {
           onClick={() => browser.tabs.create({ url: "/my-history.html" })}
           disabled={isSyncing}
         >
-          打开记录与分析
+          打开喜好资料库
         </button>
         <button
           className="w-full rounded bg-[#00a1d6] px-2 py-2 text-white hover:bg-[#0091c2] disabled:cursor-not-allowed disabled:bg-gray-300"

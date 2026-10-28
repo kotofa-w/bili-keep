@@ -5,12 +5,13 @@ import Settings from "../../pages/Settings";
 import ScrollToTopButton from "../../components/ScrollToTopButton";
 import { Toaster } from "react-hot-toast";
 import Analytics from "../../pages/Analytics";
+import Library from "../../pages/Library";
 
-const routes = new Set(["/", "/analytics", "/settings"]);
+const routes = new Set(["/", "/library", "/analytics", "/settings"]);
 
 const getCurrentPath = () => {
-  const path = window.location.hash.replace(/^#/, "") || "/";
-  return routes.has(path) ? path : "/";
+  const path = window.location.hash.replace(/^#/, "") || "/library";
+  return routes.has(path) ? path : "/library";
 };
 
 const App = () => {
@@ -20,8 +21,8 @@ const App = () => {
     const handleHashChange = () => {
       const path = getCurrentPath();
       setCurrentPath(path);
-      if (!routes.has(window.location.hash.replace(/^#/, "") || "/")) {
-        window.history.replaceState(null, "", "#/");
+      if (!routes.has(window.location.hash.replace(/^#/, "") || "/library")) {
+        window.history.replaceState(null, "", "#/library");
       }
     };
 
@@ -31,7 +32,9 @@ const App = () => {
   }, []);
 
   const page =
-    currentPath === "/analytics" ? (
+    currentPath === "/library" ? (
+      <Library />
+    ) : currentPath === "/analytics" ? (
       <Analytics />
     ) : currentPath === "/settings" ? (
       <Settings />

@@ -38,6 +38,9 @@ importers:
       autoprefixer:
         specifier: ^10.4.21
         version: 10.5.2(postcss@8.5.16)
+      fake-indexeddb:
+        specifier: ^6.2.6
+        version: 6.2.6
       postcss:
         specifier: ^8.5.3
         version: 8.5.16
@@ -1796,6 +1799,13 @@ packages:
       {
         integrity: sha512-D+42+T12DdIlJM3uepa55qGiL3sYdLBOxIl2ifQCzCHz4c7eiolaHsi3BIqEr7JxBzxv2pYZQX9kw16ziMcEmw==,
       }
+
+  fake-indexeddb@6.2.6:
+    resolution:
+      {
+        integrity: sha512-ihhmr0KoET51jT8R4YhbUYuLLvr1qqO6INISygtN16i8loR8kAxtAUr4+EKHTSMjL+lggaAn4OC7DRqzrNgnuQ==,
+      }
+    engines: { node: ">=18" }
 
   fast-glob@3.3.3:
     resolution:
@@ -4855,6 +4865,8 @@ snapshots:
   expect-type@1.4.0: {}
 
   exsolve@1.1.0: {}
+
+  fake-indexeddb@6.2.6: {}
 
   fast-glob@3.3.3:
     dependencies:
